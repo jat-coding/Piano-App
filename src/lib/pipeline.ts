@@ -143,10 +143,14 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
   st.setProgress(-1); // indeterminate while the model loads / spectrogram runs
   st.setStage('Transcribing — this runs entirely on your device…');
   try {
-    const raw = await transcribe(slice, useStore.getState().cleanup, (p) =>
+    const raw = await transcribe(
+      slice,
+      useStore.getState().cleanup,
       // Stay indeterminate until real per-frame progress arrives, so the bar
       // animates during model load instead of looking frozen at 0%.
-      useStore.getState().setProgress(p > 0 ? p : -1),
+      (p) => useStore.getState().setProgress(p > 0 ? p : -1),
+      (backend) =>
+        useStore.getState().setStage(`Transcribing on your device (${backend})…`),
     );
     if (cancelled) return;
     useStore.getState().setRaw(raw, name);

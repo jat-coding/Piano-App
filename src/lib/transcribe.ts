@@ -11,6 +11,12 @@ export const DEFAULT_CLEANUP: CleanupParams = {
 let worker: Worker | null = null;
 let pending: { resolve: (n: RawNote[]) => void; reject: (e: Error) => void } | null = null;
 let progressCb: ((p: number) => void) | null = null;
+let backendCb: ((name: string) => void) | null = null;
+
+function killWorker(): void {
+  worker?.terminate();
+  worker = null;
+}
 
 function getWorker(): Worker {
   if (worker) return worker;
@@ -20,6 +26,7 @@ function getWorker(): Worker {
   worker.onmessage = (e: MessageEvent) => {
     const msg = e.data;
     if (msg.type === 'progress') progressCb?.(msg.percent);
+    else if (msg.type === 'backend') backendCb?.(msg.name);
     else if (msg.type === 'notes') {
       pending?.resolve(msg.notes);
       pending = null;
@@ -29,8 +36,10 @@ function getWorker(): Worker {
     }
   };
   worker.onerror = (e) => {
+    // A crashed worker can't be reused — drop it so the next run starts fresh.
     pending?.reject(new Error(e.message || 'Transcription worker crashed'));
     pending = null;
+    killWorker();
   };
   return worker;
 }
@@ -40,9 +49,11 @@ export function transcribe(
   audio: Float32Array,
   params: CleanupParams,
   onProgress: (percent: number) => void,
+  onBackend?: (name: string) => void,
 ): Promise<RawNote[]> {
   const w = getWorker();
   progressCb = onProgress;
+  backendCb = onBackend ?? null;
   return new Promise((resolve, reject) => {
     pending = { resolve, reject };
     // Transfer the audio buffer to avoid a copy.

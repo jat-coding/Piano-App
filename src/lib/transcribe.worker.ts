@@ -26,15 +26,16 @@ let lastOnsets: number[][] | null = null;
 let basicPitch: BasicPitch | null = null;
 
 /**
- * Pick the fastest available backend:
- *  - webgl: fastest on desktop (works in a worker via OffscreenCanvas),
- *  - wasm:  SIMD-accelerated, the fast path inside a worker on iOS/WebKit
- *           where webgl-in-worker is unavailable,
- *  - cpu:   pure-JS last resort.
+ * Use the SIMD-accelerated WASM backend, falling back to pure-JS CPU.
+ *
+ * We deliberately do NOT use WebGL in the worker: on iOS/WebKit, OffscreenCanvas
+ * exists (so setBackend('webgl') reports success) but WebGL-in-worker is broken
+ * and pathologically slow — which made transcription crawl/crash. WASM SIMD is
+ * fast and reliable inside a worker on every platform.
  */
 async function ensureBackend(): Promise<void> {
   setWasmPaths('/tfjs-wasm/');
-  for (const backend of ['webgl', 'wasm', 'cpu']) {
+  for (const backend of ['wasm', 'cpu']) {
     try {
       if (await tf.setBackend(backend)) {
         await tf.ready();
@@ -78,6 +79,7 @@ self.onmessage = async (e: MessageEvent) => {
   try {
     if (msg.type === 'transcribe') {
       const model = await ensureModel();
+      post({ type: 'backend', name: tf.getBackend() });
       const audio: Float32Array = msg.audio;
       post({ type: 'progress', percent: 0 });
       await model.evaluateModel(
