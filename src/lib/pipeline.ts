@@ -1,7 +1,7 @@
 import { useStore } from '../store';
 import { parseMidi } from './midi';
 import { fileToMonoAudio, isMidi, isAudioOrVideo, TARGET_SR } from './audio';
-import { transcribe, rederive } from './transcribe';
+import { transcribe, rederive, cancelTranscription } from './transcribe';
 import { rawToSong } from './cleanup';
 import type { CleanupParams } from './transcribe';
 import type { BuildOptions } from './cleanup';
@@ -21,6 +21,29 @@ async function persist(song: Song, kind: SongKind): Promise<void> {
   }
 }
 
+// Set true when the user cancels; in-flight decode/transcription bail out quietly.
+let cancelled = false;
+
+function isAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
+/**
+ * Cancel whatever import/transcription is running: stop the worker, drop any
+ * decoded/partial data, and return the user to the start screen + library.
+ */
+export function cancelProcessing(): void {
+  cancelled = true;
+  cancelTranscription();
+  const s = useStore.getState();
+  s.setTranscribing(false);
+  s.setProgress(-1);
+  s.setStage('');
+  s.clearPending();
+  s.setRaw(null, '');
+  s.setParseError(null);
+}
+
 /** Rebuild the playable Song from the cached raw notes + current build options. */
 function rebuild(): void {
   const { rawNotes, sourceName, build, setSong } = useStore.getState();
@@ -32,6 +55,7 @@ function rebuild(): void {
 export async function loadFile(file: File): Promise<void> {
   const s = useStore.getState();
   s.setParseError(null);
+  cancelled = false;
 
   if (isMidi(file)) {
     try {
@@ -74,6 +98,8 @@ export async function loadFile(file: File): Promise<void> {
       ffmpegProgress: (r) => useStore.getState().setProgress(r),
     });
 
+    if (cancelled) return; // user backed out during decode
+
     const name = file.name.replace(/\.[^.]+$/, '');
     const kind: 'audio' | 'video' = /\.(mp4|mov|webm|m4v)$/i.test(file.name)
       ? 'video'
@@ -83,6 +109,7 @@ export async function loadFile(file: File): Promise<void> {
     useStore.getState().setTranscribing(false);
     useStore.getState().setPending(audio, name, kind, audio.length / TARGET_SR);
   } catch (err) {
+    if (cancelled) return;
     console.error(err);
     useStore.getState().setTranscribing(false);
     useStore
@@ -110,26 +137,31 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
   const slice = end > start ? audio.slice(start, end) : audio;
   const { pendingName: name, pendingKind: kind } = st;
 
+  cancelled = false;
   st.clearPending();
   st.setTranscribing(true);
-  st.setProgress(0);
+  st.setProgress(-1); // indeterminate while the model loads / spectrogram runs
   st.setStage('Transcribing — this runs entirely on your device…');
   try {
     const raw = await transcribe(slice, useStore.getState().cleanup, (p) =>
-      useStore.getState().setProgress(p),
+      // Stay indeterminate until real per-frame progress arrives, so the bar
+      // animates during model load instead of looking frozen at 0%.
+      useStore.getState().setProgress(p > 0 ? p : -1),
     );
+    if (cancelled) return;
     useStore.getState().setRaw(raw, name);
     rebuild();
     useStore.getState().setShowCleanup(true);
     const built = useStore.getState().song;
     if (built) persist(built, kind);
   } catch (err) {
+    if (cancelled || isAbort(err)) return; // user cancelled — not an error
     console.error(err);
     useStore
       .getState()
       .setParseError(err instanceof Error ? err.message : 'Transcription failed.');
   } finally {
-    useStore.getState().setTranscribing(false);
+    if (!cancelled) useStore.getState().setTranscribing(false);
   }
 }
 

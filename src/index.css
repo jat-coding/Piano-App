@@ -534,6 +534,9 @@ body,
   margin: 8px 0 0;
   line-height: 1.5;
 }
+.cancel-btn {
+  margin-top: 18px;
+}
 
 /* ---------- Cleanup panel ---------- */
 .cleanup-toggle {

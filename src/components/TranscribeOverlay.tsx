@@ -1,4 +1,5 @@
 import { useStore } from '../store';
+import { cancelProcessing } from '../lib/pipeline';
 import { MusicIcon } from './icons';
 
 /** Full-screen progress while Basic Pitch runs (in a worker — UI never freezes). */
@@ -28,6 +29,9 @@ export function TranscribeOverlay() {
       <p className="disclaimer">
         Audio → MIDI is an estimate (best on clean solo piano). You can clean it up after.
       </p>
+      <button className="ghost-btn cancel-btn" onClick={cancelProcessing}>
+        Cancel
+      </button>
     </div>
   );
 }

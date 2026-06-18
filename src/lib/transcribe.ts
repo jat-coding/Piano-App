@@ -50,6 +50,23 @@ export function transcribe(
   });
 }
 
+/**
+ * Abort an in-flight transcription: terminate the worker (which immediately
+ * stops Basic Pitch inference) and reject the pending promise. A fresh worker
+ * is created on the next transcribe().
+ */
+export function cancelTranscription(): void {
+  if (worker) {
+    worker.terminate();
+    worker = null;
+  }
+  if (pending) {
+    pending.reject(new DOMException('Transcription cancelled', 'AbortError'));
+    pending = null;
+  }
+  progressCb = null;
+}
+
 /** Re-derive notes from the cached model output with new cleanup thresholds. */
 export function rederive(params: CleanupParams): Promise<RawNote[]> {
   const w = getWorker();
