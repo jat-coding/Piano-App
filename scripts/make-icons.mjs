@@ -71,21 +71,33 @@ function draw(size, pad) {
 
   rect(0, 0, size, size, bg);
 
-  const inner = size - pad * 2;
-  const noteW = Math.round(inner * 0.13);
-  const kbY = pad + Math.round(inner * 0.72);
+  // Keyboard fills the bottom and runs edge to edge; white keys are tall and
+  // the black keys scale up with them.
+  const kbTop = Math.round(size * 0.56);
+  const kbH = size - kbTop;
 
-  // Falling notes (orange right, blue left).
-  rect(pad + Math.round(inner * 0.18), pad + Math.round(inner * 0.1), noteW, Math.round(inner * 0.4), blue);
-  rect(pad + Math.round(inner * 0.42), pad + Math.round(inner * 0.22), noteW, Math.round(inner * 0.36), orange);
-  rect(pad + Math.round(inner * 0.66), pad + Math.round(inner * 0.06), noteW, Math.round(inner * 0.5), orange);
+  // Falling notes above the keyboard.
+  const noteW = Math.round(size * 0.11);
+  const top = Math.round(size * 0.1);
+  const span = kbTop - top - Math.round(size * 0.04);
+  rect(Math.round(size * 0.18), top + Math.round(span * 0.05), noteW, Math.round(span * 0.55), blue);
+  rect(Math.round(size * 0.44), top + Math.round(span * 0.3), noteW, Math.round(span * 0.55), orange);
+  rect(Math.round(size * 0.7), top, noteW, Math.round(span * 0.7), orange);
 
-  // Keyboard strip.
-  rect(pad, kbY, inner, Math.round(inner * 0.2), white);
-  const keyW = Math.round(inner / 7);
+  // White keys: full-bleed ivory slab to the bottom + side borders.
+  rect(0, kbTop, size, kbH, white);
+  const keyW = size / 7;
   for (let k = 1; k < 7; k++) {
-    if (k === 3 || k === 7) continue; // skip B/E-ish gaps loosely
-    rect(pad + k * keyW - Math.round(keyW * 0.3), kbY, Math.round(keyW * 0.6), Math.round(inner * 0.12), black);
+    const gx = Math.round(k * keyW);
+    rect(gx - 1, kbTop, 2, kbH, bg); // seams between white keys
+  }
+  // Black keys: taller, width and height scaled to the white-key size.
+  const blackH = Math.round(kbH * 0.62);
+  const blackW = Math.round(keyW * 0.6);
+  for (let k = 1; k < 7; k++) {
+    if (k === 3) continue; // no black key at the E–F gap
+    const cx = Math.round(k * keyW);
+    rect(cx - Math.round(blackW / 2), kbTop, blackW, blackH, black);
   }
   return buf;
 }

@@ -256,7 +256,7 @@ export function TrimDialog() {
             Use whole clip
           </button>
           <button className="primary-btn" onClick={() => finish(false)}>
-            Transcribe selection
+            Transcribe
           </button>
         </div>
       </div>
