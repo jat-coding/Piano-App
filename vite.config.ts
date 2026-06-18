@@ -32,7 +32,7 @@ export default defineConfig({
       workbox: {
         // The transcription worker bundles tfjs (~3.4MB) — precache it for offline.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,bin,json,mid,png}'],
+        globPatterns: ['**/*.{js,css,html,bin,json,mid,png,wasm}'],
         runtimeCaching: [
           {
             // Salamander piano samples — cache on first use so audio works offline.

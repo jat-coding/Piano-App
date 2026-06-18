@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import * as tf from '@tensorflow/tfjs';
+import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from '@spotify/basic-pitch';
 
 const MODEL_URL = '/basic-pitch-model/model.json';
@@ -24,15 +25,31 @@ let lastOnsets: number[][] | null = null;
 
 let basicPitch: BasicPitch | null = null;
 
+/**
+ * Pick the fastest available backend:
+ *  - webgl: fastest on desktop (works in a worker via OffscreenCanvas),
+ *  - wasm:  SIMD-accelerated, the fast path inside a worker on iOS/WebKit
+ *           where webgl-in-worker is unavailable,
+ *  - cpu:   pure-JS last resort.
+ */
+async function ensureBackend(): Promise<void> {
+  setWasmPaths('/tfjs-wasm/');
+  for (const backend of ['webgl', 'wasm', 'cpu']) {
+    try {
+      if (await tf.setBackend(backend)) {
+        await tf.ready();
+        return;
+      }
+    } catch {
+      /* try the next backend */
+    }
+  }
+  await tf.ready();
+}
+
 async function ensureModel(): Promise<BasicPitch> {
   if (basicPitch) return basicPitch;
-  try {
-    await tf.setBackend('webgl');
-    await tf.ready();
-  } catch {
-    await tf.setBackend('cpu');
-    await tf.ready();
-  }
+  await ensureBackend();
   basicPitch = new BasicPitch(MODEL_URL);
   return basicPitch;
 }
