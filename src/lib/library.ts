@@ -12,6 +12,7 @@ export interface SavedSong {
   kind: SongKind;
   duration: number;
   createdAt: number;
+  lastPlayedAt?: number; // for "last practiced first"
   notes: NoteEvent[];
 }
 
@@ -61,7 +62,19 @@ export async function listSongs(): Promise<SavedSongMeta[]> {
   const all = await tx<SavedSong[]>('readonly', (s) => s.getAll() as IDBRequest<SavedSong[]>);
   return all
     .map(({ notes: _notes, ...meta }) => meta)
-    .sort((a, b) => b.createdAt - a.createdAt);
+    // Last-practiced first; songs never played fall back to most-recently added.
+    .sort((a, b) => (b.lastPlayedAt ?? b.createdAt) - (a.lastPlayedAt ?? a.createdAt));
+}
+
+/** Mark a song as just practiced (moves it to the front of the rack). */
+export async function touchSong(id: string): Promise<void> {
+  const rec = await tx<SavedSong | undefined>(
+    'readonly',
+    (s) => s.get(id) as IDBRequest<SavedSong | undefined>,
+  );
+  if (!rec) return;
+  rec.lastPlayedAt = Date.now();
+  await tx('readwrite', (s) => s.put(rec));
 }
 
 export async function getSong(id: string): Promise<Song | null> {

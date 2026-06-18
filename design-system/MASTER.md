@@ -57,5 +57,18 @@ one staggered start-screen reveal; impacts/glow toggleable; all motion respects
 - **States:** hover/active/focus/disabled + empty (library hidden when empty) + error (parse
   errors, MIDI unsupported) + loading (transcription progress) all designed.
 
-## 4. Deviations
+## 4. Home screen — "the music stand" (kitsch evolution)
+The landing screen is a **full-page mahogany grand piano**: a richly detailed wood lid/fallboard
+at the top that **blurs/gradients into flat mahogany** as it descends. On the "stand" sits a
+**horizontally swipeable rack of song sheets** — each song is a mock music-sheet card (staff
+lines + decorative noteheads, no real notation needed) titled with the song's name. Swiping
+**soft-locks (snap)** one card at a time so you can't blow past them. The **last-practiced song
+sits first** (these are long-term practice pieces). A "＋ Add a song" card starts an import.
+Tapping a card opens a **chooser**: *Falling notes* (the Cascade player) or *Sheet music*.
+
+Wordmark "Cascade" uses a **fuller display face** (Yeseva One) for warmth/kitsch; Fraunces stays
+for secondary headings, Spectral for body. Mahogany tokens: `--mahogany #4a2a1a`, deep
+`#2c1810`, highlight `#6b3f28`. Signature shifts to **the wood rack + snapping song sheets**.
+
+## 5. Deviations
 None yet. Add `design-system/pages/<screen>.md` to override for a specific screen.

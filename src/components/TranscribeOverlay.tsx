@@ -7,11 +7,11 @@ export function TranscribeOverlay() {
   const transcribing = useStore((s) => s.transcribing);
   const stage = useStore((s) => s.stage);
   const progress = useStore((s) => s.progress);
-  const song = useStore((s) => s.song);
+  const view = useStore((s) => s.view);
 
-  // Only take over the whole screen for the initial transcription, not for the
-  // lightweight re-derive that happens when tuning cleanup sliders.
-  if (!transcribing || song) return null;
+  // Full-screen for the initial import (on the home screen), but not for the
+  // lightweight re-derive that runs in the player when tuning cleanup sliders.
+  if (!transcribing || view === 'player') return null;
 
   const determinate = progress >= 0;
   const pct = Math.round(Math.max(0, Math.min(1, progress)) * 100);

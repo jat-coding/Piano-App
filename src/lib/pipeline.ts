@@ -5,7 +5,7 @@ import { transcribe, rederive, cancelTranscription } from './transcribe';
 import { rawToSong } from './cleanup';
 import type { CleanupParams } from './transcribe';
 import type { BuildOptions } from './cleanup';
-import { saveSong, listSongs, deleteSong, getSong } from './library';
+import { saveSong, listSongs, deleteSong, getSong, touchSong } from './library';
 import type { Song } from '../types';
 import type { SongKind } from './library';
 
@@ -15,7 +15,10 @@ async function persist(song: Song, kind: SongKind): Promise<void> {
     const existing = await listSongs();
     const dupe = existing.find((s) => s.name === song.name && s.kind === kind);
     if (dupe) await deleteSong(dupe.id);
-    await saveSong(song, kind);
+    const saved = await saveSong(song, kind);
+    const s = useStore.getState();
+    s.setCurrentSavedId(saved.id);
+    s.bumpLibrary();
   } catch (err) {
     console.warn('Could not save to library', err);
   }
@@ -67,6 +70,7 @@ export async function loadFile(file: File): Promise<void> {
       s.setRaw(null, ''); // clear any prior transcription (hides cleanup panel)
       s.setShowCleanup(false);
       s.setSong(song);
+      s.setView('player');
       persist(song, 'midi');
     } catch (err) {
       console.error(err);
@@ -156,6 +160,7 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
     useStore.getState().setRaw(raw, name);
     rebuild();
     useStore.getState().setShowCleanup(true);
+    useStore.getState().setView('player');
     const built = useStore.getState().song;
     if (built) persist(built, kind);
   } catch (err) {
@@ -176,7 +181,10 @@ export async function loadSavedSong(id: string): Promise<void> {
   const s = useStore.getState();
   s.setRaw(null, ''); // saved songs are already cleaned up
   s.setShowCleanup(false);
+  s.setCurrentSavedId(id);
   s.setSong(song);
+  await touchSong(id); // mark as just practiced → moves to the front
+  s.bumpLibrary();
 }
 
 /** Split-point / quantize / bpm change → cheap local rebuild (no inference). */

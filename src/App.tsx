@@ -1,27 +1,32 @@
 import { useStore } from './store';
-import { Uploader } from './components/Uploader';
+import { Home } from './components/Home';
 import { Player } from './components/Player';
+import { SheetView } from './components/SheetView';
 import { TranscribeOverlay } from './components/TranscribeOverlay';
 import { TrimDialog } from './components/TrimDialog';
 import { ChevronLeftIcon } from './components/icons';
 
 export default function App() {
+  const view = useStore((s) => s.view);
   const song = useStore((s) => s.song);
-  const reset = useStore((s) => s.reset);
+  const setView = useStore((s) => s.setView);
 
   return (
     <div className="app">
-      {song ? (
+      {view === 'home' && <Home />}
+
+      {view === 'player' && (
         <>
           <Player />
-          <button className="back-btn" onClick={reset} title="Load another file">
-            <ChevronLeftIcon size={16} /> New file
+          <button className="back-btn" onClick={() => setView('home')} title="Back to rack">
+            <ChevronLeftIcon size={16} /> Rack
           </button>
-          <div className="song-title">{song.name}</div>
+          {song && <div className="song-title">{song.name}</div>}
         </>
-      ) : (
-        <Uploader />
       )}
+
+      {view === 'sheet' && <SheetView />}
+
       <TranscribeOverlay />
       <TrimDialog />
     </div>

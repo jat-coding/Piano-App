@@ -12,6 +12,9 @@
   --brass-soft: #d8be78;
   --felt: #7a2f33; /* burgundy felt */
   --sage: #a7b86a; /* "play here" cue */
+  --mahogany: #4a2a1a;
+  --mahogany-deep: #2c1810;
+  --mahogany-hi: #6b3f28;
   --text: #f1e7d0; /* ivory */
   --muted: #a89a7e; /* aged ivory */
   --panel: rgba(29, 24, 19, 0.86);
@@ -76,6 +79,284 @@ body,
       transparent 3px
     ),
     var(--bg);
+}
+
+/* ---------- Home: the mahogany music rack ---------- */
+.home {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: linear-gradient(
+    to bottom,
+    var(--mahogany-hi) 0%,
+    var(--mahogany) 48%,
+    var(--mahogany-deep) 100%
+  );
+}
+/* Detailed wood grain at the top that blurs into flat mahogany going down. */
+.home::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    91deg,
+    rgba(0, 0, 0, 0.18) 0 2px,
+    rgba(255, 255, 255, 0.045) 2px 6px,
+    rgba(0, 0, 0, 0.1) 6px 12px
+  );
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.95), transparent 68%);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.95), transparent 68%);
+  pointer-events: none;
+}
+.home::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 40%;
+  background: radial-gradient(120% 80% at 50% 0%, rgba(255, 220, 170, 0.12), transparent 70%);
+  pointer-events: none;
+}
+.home-head {
+  position: relative;
+  text-align: center;
+  padding: calc(20px + env(safe-area-inset-top)) 16px 6px;
+  z-index: 1;
+}
+.wordmark {
+  font-family: 'Yeseva One', var(--display);
+  font-weight: 400;
+  font-size: clamp(40px, 9vw, 74px);
+  line-height: 1;
+  margin: 0;
+  color: var(--ivory, #f1e7d0);
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.35), 0 0 22px rgba(255, 210, 150, 0.18);
+  letter-spacing: 0.01em;
+}
+.home-sub {
+  margin: 8px 0 0;
+  color: rgba(241, 231, 208, 0.7);
+  font-style: italic;
+  font-size: 14px;
+}
+.rack {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 16px clamp(16px, 50vw - 150px, 50vw);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory; /* soft-lock one card at a time */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rack::-webkit-scrollbar {
+  display: none;
+}
+.rack-card {
+  flex: 0 0 auto;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  width: min(260px, 70vw);
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.18s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.rack-card:hover,
+.rack-card:focus-visible {
+  transform: translateY(-6px);
+}
+.sheet-svg {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5), 0 2px 0 rgba(255, 255, 255, 0.05);
+}
+.sheet-svg .paper {
+  fill: #efe5cf;
+  stroke: rgba(0, 0, 0, 0.18);
+}
+.sheet-svg line {
+  stroke: rgba(40, 30, 20, 0.5);
+  stroke-width: 1;
+}
+.sheet-svg .clef {
+  font-size: 22px;
+  fill: rgba(30, 20, 12, 0.75);
+}
+.sheet-svg .sheet-title {
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+  fill: #2a1c10;
+}
+.sheet-svg .noteheads ellipse {
+  fill: #7a4a22;
+}
+.rack-meta {
+  color: rgba(241, 231, 208, 0.65);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.add-card {
+  width: min(180px, 56vw);
+  aspect-ratio: 26 / 34;
+  border: 2px dashed rgba(241, 231, 208, 0.35);
+  border-radius: 10px;
+  color: rgba(241, 231, 208, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 15px;
+  background: rgba(0, 0, 0, 0.12);
+}
+.add-card:hover {
+  border-color: var(--brass-soft);
+  color: var(--brass-soft);
+  transform: translateY(-6px);
+}
+.add-plus {
+  font-size: 40px;
+  line-height: 1;
+}
+.add-hint {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.rack-empty {
+  flex: 0 0 auto;
+  max-width: 60vw;
+  color: rgba(241, 231, 208, 0.7);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ---------- Song chooser popup ---------- */
+.chooser-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  backdrop-filter: blur(3px);
+}
+.chooser {
+  width: min(380px, 90vw);
+  background: linear-gradient(180deg, var(--mahogany-hi), var(--mahogany-deep));
+  border: 1px solid rgba(255, 220, 170, 0.18);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+.chooser h2 {
+  font-family: var(--display);
+  margin: 0 0 2px;
+  font-size: 22px;
+  color: var(--ivory, #f1e7d0);
+}
+.chooser-sub {
+  margin: 0 0 18px;
+  color: rgba(241, 231, 208, 0.65);
+  font-size: 13px;
+}
+.chooser-actions {
+  display: flex;
+  gap: 12px;
+}
+.chooser-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.chooser-btn:hover {
+  border-color: var(--brass);
+}
+.chooser-btn.primary {
+  background: linear-gradient(180deg, var(--brass-soft), var(--brass));
+  color: #1c160a;
+  border: none;
+}
+.chooser-remove {
+  margin-top: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: rgba(255, 130, 120, 0.85);
+  font-size: 13px;
+}
+.chooser-remove:hover {
+  color: #ff6b6b;
+}
+
+/* ---------- Sheet view ---------- */
+.sheet-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #2c1810;
+}
+.sheet-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  background: linear-gradient(180deg, var(--mahogany-hi), var(--mahogany));
+  border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+}
+.sheet-bar .back-btn {
+  position: static;
+}
+.sheet-name {
+  font-family: var(--display);
+  font-size: 17px;
+  color: var(--ivory, #f1e7d0);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-hint {
+  color: rgba(241, 231, 208, 0.5);
+  font-size: 12px;
+  font-style: italic;
+}
+.sheet-scroll {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  padding: 16px;
+}
+.sheet-canvas {
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
 /* ---------- Uploader ---------- */

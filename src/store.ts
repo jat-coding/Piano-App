@@ -14,6 +14,9 @@ import type { SongKind } from './lib/library';
  */
 export type PracticeMode = 'off' | 'listen' | 'wait';
 
+/** Which top-level screen is showing. */
+export type View = 'home' | 'player' | 'sheet';
+
 interface AppState {
   song: Song | null;
   isPlaying: boolean;
@@ -54,6 +57,11 @@ interface AppState {
   midiEnabled: boolean;
   midiDevices: string[];
 
+  // ---- navigation / library ----
+  view: View;
+  currentSavedId: string | null;
+  libraryVersion: number; // bump to make the home rack re-query
+
   setSong: (song: Song | null) => void;
   setPlaying: (p: boolean) => void;
   setCurrentTime: (t: number) => void;
@@ -83,6 +91,9 @@ interface AppState {
   setWaiting: (v: boolean) => void;
   setExpected: (m: number[]) => void;
   setMidi: (enabled: boolean, devices: string[]) => void;
+  setView: (v: View) => void;
+  setCurrentSavedId: (id: string | null) => void;
+  bumpLibrary: () => void;
   reset: () => void;
 }
 
@@ -122,6 +133,10 @@ export const useStore = create<AppState>((set) => ({
   expected: [],
   midiEnabled: false,
   midiDevices: [],
+
+  view: 'home',
+  currentSavedId: null,
+  libraryVersion: 0,
 
   setSong: (song) =>
     set({
@@ -164,6 +179,9 @@ export const useStore = create<AppState>((set) => ({
   setWaiting: (waiting) => set({ waiting }),
   setExpected: (expected) => set({ expected }),
   setMidi: (midiEnabled, midiDevices) => set({ midiEnabled, midiDevices }),
+  setView: (view) => set({ view }),
+  setCurrentSavedId: (currentSavedId) => set({ currentSavedId }),
+  bumpLibrary: () => set((s) => ({ libraryVersion: s.libraryVersion + 1 })),
 
   reset: () =>
     set({
@@ -185,5 +203,7 @@ export const useStore = create<AppState>((set) => ({
       practiceMode: 'off',
       waiting: false,
       expected: [],
+      view: 'home',
+      currentSavedId: null,
     }),
 }));
