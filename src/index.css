@@ -190,19 +190,22 @@ body,
 .song-title {
   position: absolute;
   top: 14px;
-  left: 16px;
-  font-size: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--display);
+  font-size: 15px;
   color: var(--muted);
   pointer-events: none;
-  max-width: 40vw;
+  max-width: 46vw;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
 }
 .back-btn {
   position: absolute;
   top: 12px;
-  right: 16px;
+  right: calc(16px + env(safe-area-inset-right));
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -225,7 +228,8 @@ body,
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  padding: 12px calc(16px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
   background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
   display: flex;
   flex-direction: column;
@@ -234,10 +238,15 @@ body,
   z-index: 20;
 }
 .player.ui-hidden .bottom-bar,
-.player.ui-hidden .song-title,
-.player.ui-hidden .back-btn {
+.player.ui-hidden .back-btn,
+.player.ui-hidden .cleanup-toggle {
   opacity: 0;
   transform: translateY(8px);
+  pointer-events: none;
+}
+.player.ui-hidden .song-title {
+  opacity: 0;
+  transform: translate(-50%, 8px);
   pointer-events: none;
 }
 
@@ -530,7 +539,7 @@ body,
 .cleanup-toggle {
   position: absolute;
   top: 12px;
-  left: 16px;
+  left: calc(16px + env(safe-area-inset-left));
   z-index: 25;
   display: inline-flex;
   align-items: center;
@@ -549,9 +558,11 @@ body,
 .cleanup-panel {
   position: absolute;
   top: 52px;
-  left: 16px;
+  left: calc(16px + env(safe-area-inset-left));
   z-index: 25;
   width: min(320px, 80vw);
+  max-height: calc(100% - 130px);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -944,6 +955,8 @@ body,
 }
 .trim-card {
   width: min(720px, 94vw);
+  max-height: 92vh;
+  overflow-y: auto;
   background: linear-gradient(180deg, var(--wood), var(--bg-2));
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -1128,6 +1141,32 @@ body,
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* ---------- Short viewports (phone landscape): keep dialogs from overflowing ---------- */
+@media (max-height: 480px) {
+  .trim-card {
+    padding: 16px;
+  }
+  .trim-card h2 {
+    font-size: 19px;
+  }
+  .trim-sub {
+    margin-bottom: 12px;
+  }
+  .waveform-wrap {
+    height: 84px;
+  }
+  .trim-times {
+    margin-bottom: 14px;
+  }
+  .settings-panel {
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+  .transcribe-overlay h2 {
+    font-size: 19px;
   }
 }
 
