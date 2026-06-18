@@ -1,6 +1,7 @@
 node_modules
 dist
 dev.log
+*.tsbuildinfo
 *.local
 .claude/settings.local.json
 .DS_Store
