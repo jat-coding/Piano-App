@@ -82,11 +82,13 @@ self.onmessage = async (e: MessageEvent) => {
       post({ type: 'backend', name: tf.getBackend() });
       const audio: Float32Array = msg.audio;
       post({ type: 'progress', percent: 0 });
+      lastFrames = [];
+      lastOnsets = [];
       await model.evaluateModel(
         audio,
         (frames, onsets) => {
-          lastFrames = frames;
-          lastOnsets = onsets;
+          lastFrames!.push(...frames);
+          lastOnsets!.push(...onsets);
         },
         (percent: number) => post({ type: 'progress', percent }),
       );
