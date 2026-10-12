@@ -1,8 +1,10 @@
 import type { FFmpeg } from '@ffmpeg/ffmpeg';
 
 // ffmpeg-core is ~30MB; load from CDN on demand and let the service worker
-// cache it so it's a one-time download.
-const CORE_BASE = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+// cache it so it's a one-time download. Must be the ESM build: Vite bundles
+// @ffmpeg/ffmpeg's worker as a module worker, which can't importScripts the UMD
+// build and fails with "failed to import ffmpeg-core.js" (seen 2026-10-12).
+const CORE_BASE = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
 
 let ffmpegPromise: Promise<FFmpeg> | null = null;
 
