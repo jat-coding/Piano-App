@@ -9,6 +9,7 @@ import { Settings } from './Settings';
 import { MidiInput } from '../lib/midiInput';
 import { RotateIcon } from './icons';
 import { ExportDialog } from './ExportDialog';
+import { NoteScrub } from '../lib/noteScrub';
 
 function isMobile(): boolean {
   return (
@@ -27,6 +28,7 @@ export function Player() {
   const midiRef = useRef<MidiInput>(new MidiInput());
   const rafRef = useRef(0);
   const hideTimerRef = useRef<number>(0);
+  const scrubRef = useRef<NoteScrub | null>(null);
 
   const [uiVisible, setUiVisible] = useState(true);
   const [portrait, setPortrait] = useState(false);
@@ -103,6 +105,7 @@ export function Player() {
       renderer.opts.showHands = st.showHands;
       renderer.opts.pixelsPerSecond = st.fallSpeed;
 
+      scrubRef.current?.step(performance.now() / 1000, st.duration);
       const t = engine.tick();
 
       // Surface wait-mode state to the UI + renderer only when it changes.
@@ -138,6 +141,7 @@ export function Player() {
 
   // ---- load song into renderer + engine when it changes ----
   useEffect(() => {
+    scrubRef.current?.reset();
     rendererRef.current?.setSong(song);
     engineRef.current.setSong(song);
     setPlaying(false);
@@ -192,6 +196,7 @@ export function Player() {
 
   const seek = useCallback(
     (t: number) => {
+      scrubRef.current?.stop();
       engineRef.current.seek(t);
       setCurrentTime(engineRef.current.songTime);
     },
@@ -226,7 +231,33 @@ export function Player() {
     setLoopB(b);
   }, [setLoopA, setLoopB]);
 
+  // ---- drag the falling notes to scrub (see lib/noteScrub.ts) ----
+  const playPauseRef = useRef(playPause);
+  playPauseRef.current = playPause;
+  const pokeRef = useRef(poke);
+  pokeRef.current = poke;
+  if (!scrubRef.current) {
+    scrubRef.current = new NoteScrub({
+      engine: engineRef.current,
+      pixelsPerSecond: () => useStore.getState().fallSpeed,
+      onTap: () => playPauseRef.current(),
+      onPause: () => {
+        engineRef.current.pause();
+        setPlaying(false);
+      },
+      onResume: () => {
+        engineRef.current.play().then(() => {
+          setPlaying(true);
+          pokeRef.current();
+        });
+      },
+    });
+    // Read by the headless tests, like __cascadeLastExport.
+    (window as any).__cascadePlayer = { engine: engineRef.current, scrub: scrubRef.current };
+  }
+
   const openExport = useCallback(() => {
+    scrubRef.current?.reset();
     engineRef.current.pause();
     setPlaying(false);
     setExporting(true);
@@ -296,6 +327,12 @@ export function Player() {
       className={`player${uiVisible ? '' : ' ui-hidden'}`}
       onPointerMove={poke}
       onMouseLeave={() => engineRef.current.playing && setUiVisible(false)}
+      onWheel={(e) => {
+        if (e.target !== canvasRef.current || !song) return;
+        engineRef.current.unlock();
+        scrubRef.current?.wheel(e.deltaY, e.deltaMode, e.timeStamp / 1000);
+        poke();
+      }}
     >
       <canvas
         ref={canvasRef}
@@ -304,21 +341,33 @@ export function Player() {
           if (e.target !== canvasRef.current) return;
           const renderer = rendererRef.current;
           const canvas = canvasRef.current;
-          if (!renderer || !canvas) return;
+          const scrub = scrubRef.current;
+          if (!renderer || !canvas || !scrub) return;
+          // Any touch shows the buttons; they hide again 3s into playback.
+          poke();
           const rect = canvas.getBoundingClientRect();
-          const midi = renderer.keyAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+          const midi = scrub.active
+            ? null
+            : renderer.keyAtPoint(e.clientX - rect.left, e.clientY - rect.top);
           if (midi != null) {
             // Tapped a key — play it, and let it answer wait-mode.
             engineRef.current.unlock();
             engineRef.current.notePlayed(midi);
             engineRef.current.audition(midi, 0.8);
             renderer.flashKey(midi);
-          } else {
-            // Tapped the falling-notes area — toggle playback.
-            playPause();
+            return;
           }
-          poke();
+          if (e.button !== 0 || !song) return;
+          // The falling-notes area: drag to scrub, tap to play/pause (on release).
+          engineRef.current.unlock();
+          canvas.setPointerCapture(e.pointerId);
+          scrub.pointerDown(e.pointerId, e.clientX, e.clientY, e.timeStamp / 1000);
         }}
+        onPointerMove={(e) =>
+          scrubRef.current?.pointerMove(e.pointerId, e.clientX, e.clientY, e.timeStamp / 1000)
+        }
+        onPointerUp={(e) => scrubRef.current?.pointerUp(e.pointerId, e.timeStamp / 1000)}
+        onPointerCancel={(e) => scrubRef.current?.pointerUp(e.pointerId, e.timeStamp / 1000, true)}
       />
 
       <div ref={probeRef} className="safe-probe" aria-hidden="true" />

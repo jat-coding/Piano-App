@@ -17,6 +17,24 @@ export const SAMPLE_URLS: Record<string, string> = {
 
 const CHORD_EPS = 0.04; // notes within 40ms count as one chord/gate
 
+// "Scratching" while the notes are dragged: each note sounds briefly as it crosses
+// the strike line, rate-limited so a fast drag never turns into mush.
+const SCRATCH_DUR = 0.09; // s held before release
+const SCRATCH_RELEASE = 0.12; // s fade-out (normal playback uses 1s)
+const SCRATCH_BURST = 6; // token bucket: at most this many notes at once…
+const SCRATCH_RATE = 24; // …refilled at this many notes per second
+const SCRATCH_PER_STEP = 3; // at most this many new notes per drag step / frame
+const SCRATCH_VOICES = 6; // at most this many scratch notes sounding together
+const SCRATCH_REPEAT = 0.06; // s before the same key may sound again
+const NORMAL_RELEASE = 1;
+
+export interface ScratchStats {
+  crossed: number; // notes that crossed the strike line
+  played: number; // notes actually sounded
+  dropped: number; // notes skipped by the rate limit / voice cap
+  times: number[]; // performance.now() of each sounded note (last 500)
+}
+
 /**
  * Drives audio off a single "song clock" that the renderer also reads, so the
  * picture and the sound can never drift. Speed changes scale the clock — sample
@@ -47,13 +65,21 @@ export class PlaybackEngine {
 
   loaded = false;
 
+  // ---- scrubbing (drag the notes) ----
+  private scrubbing = false;
+  private tokens = SCRATCH_BURST;
+  private tokensAt = 0;
+  private voiceEnds: number[] = [];
+  private lastByKey = new Map<number, number>();
+  scratchStats: ScratchStats = { crossed: 0, played: 0, dropped: 0, times: [] };
+
   async init(): Promise<void> {
     if (this.sampler) return;
     await new Promise<void>((resolve) => {
       this.sampler = new Tone.Sampler({
         urls: SAMPLE_URLS,
         baseUrl: SALAMANDER,
-        release: 1,
+        release: NORMAL_RELEASE,
         onload: () => {
           this.loaded = true;
           resolve();
@@ -118,6 +144,99 @@ export class PlaybackEngine {
     this.sampler?.releaseAll();
     this.cursor = this.song ? this.lowerBound(this.song.notes, this._songTime) : 0;
     this.clearGate();
+  }
+
+  /** Start a drag-scrub: notes sound short and dry until endScrub(). */
+  beginScrub(): void {
+    this.scrubbing = true;
+    if (this.sampler) this.sampler.release = SCRATCH_RELEASE;
+  }
+
+  endScrub(): void {
+    this.scrubbing = false;
+    if (this.sampler) this.sampler.release = NORMAL_RELEASE;
+  }
+
+  /**
+   * Move the clock to t without cutting notes that are already sounding, and
+   * "scratch" every note whose onset crossed the strike line on the way, in
+   * either direction. Returns the clamped time.
+   */
+  scrubTo(t: number): number {
+    const from = this._songTime;
+    const to = Math.max(0, Math.min(t, this.song?.duration ?? 0));
+    if (to === from) return to;
+    this._songTime = to;
+    this.clearGate();
+    if (!this.song) return to;
+    const notes = this.song.notes;
+    this.cursor = this.lowerBound(notes, to);
+    if (this.scrubbing) this.scratch(notes, from, to);
+    return to;
+  }
+
+  private scratch(notes: NoteEvent[], from: number, to: number): void {
+    // Onsets in (from, to] going forward, [to, from) going back.
+    const fwd = to > from;
+    let i0: number;
+    let i1: number;
+    if (fwd) {
+      i0 = this.upperBound(notes, from);
+      i1 = this.upperBound(notes, to);
+    } else {
+      i0 = this.lowerBound(notes, to);
+      i1 = this.lowerBound(notes, from);
+    }
+    if (i1 <= i0) return;
+
+    // Most recently crossed first: those are the ones under the finger now.
+    const crossed: NoteEvent[] = [];
+    if (fwd) for (let i = i1 - 1; i >= i0; i--) crossed.push(notes[i]);
+    else for (let i = i0; i < i1; i++) crossed.push(notes[i]);
+
+    const now = performance.now() / 1000;
+    this.tokens = Math.min(SCRATCH_BURST, this.tokens + (now - this.tokensAt) * SCRATCH_RATE);
+    this.tokensAt = now;
+    this.voiceEnds = this.voiceEnds.filter((e) => e > now);
+
+    let played = 0;
+    for (const n of crossed) {
+      if (this.isMuted(n)) continue;
+      this.scratchStats.crossed++;
+      const last = this.lastByKey.get(n.midi) ?? -Infinity;
+      if (
+        played >= SCRATCH_PER_STEP ||
+        this.tokens < 1 ||
+        this.voiceEnds.length >= SCRATCH_VOICES ||
+        now - last < SCRATCH_REPEAT
+      ) {
+        this.scratchStats.dropped++;
+        continue;
+      }
+      if (!this.sampler || !this.loaded) {
+        this.scratchStats.dropped++;
+        continue;
+      }
+      try {
+        this.sampler.triggerAttackRelease(
+          Tone.Frequency(n.midi, 'midi').toNote(),
+          SCRATCH_DUR,
+          undefined,
+          n.velocity * 0.7,
+        );
+      } catch {
+        this.scratchStats.dropped++;
+        continue;
+      }
+      played++;
+      this.tokens -= 1;
+      this.lastByKey.set(n.midi, now);
+      this.voiceEnds.push(now + SCRATCH_DUR + SCRATCH_RELEASE);
+      const st = this.scratchStats;
+      st.played++;
+      st.times.push(now * 1000);
+      if (st.times.length > 500) st.times.shift();
+    }
   }
 
   /** Called from MIDI input: register a key the player pressed. */
@@ -245,6 +364,18 @@ export class PlaybackEngine {
     this.sampler?.dispose();
     this.sampler = null;
     this.loaded = false;
+  }
+
+  /** First index with startTime > t. */
+  private upperBound(notes: NoteEvent[], t: number): number {
+    let lo = 0;
+    let hi = notes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (notes[mid].startTime <= t) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
   }
 
   private lowerBound(notes: NoteEvent[], t: number): number {

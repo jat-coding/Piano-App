@@ -571,34 +571,42 @@ body,
   pointer-events: none;
 }
 
-/* ---------- Scrubber ---------- */
+/* ---------- Scrubber ----------
+   Slim backup: dragging the notes is the main way to move through a song, so the
+   bar draws as a hairline. The track keeps a 24px-tall touch area. */
 .scrubber {
   display: flex;
   align-items: center;
   gap: 10px;
+  opacity: 0.75;
 }
 .time {
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
-  min-width: 38px;
+  min-width: 34px;
   text-align: center;
 }
 .scrub-track {
   position: relative;
   flex: 1;
-  height: 26px;
+  height: 24px;
   display: flex;
   align-items: center;
   cursor: pointer;
+  touch-action: none;
 }
 .minimap {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 10px;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   gap: 1px;
-  opacity: 0.35;
+  opacity: 0.2;
 }
 .minimap span {
   flex: 1;
@@ -611,25 +619,25 @@ body,
   position: absolute;
   left: 0;
   right: 0;
-  height: 4px;
+  height: 2px;
   background: rgba(255, 255, 255, 0.12);
   border-radius: 999px;
 }
 .scrub-fill {
   position: absolute;
   left: 0;
-  height: 4px;
+  height: 2px;
   background: linear-gradient(90deg, var(--brass-deep, #8a6d2f), var(--brass));
   border-radius: 999px;
   pointer-events: none;
 }
 .scrub-handle {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--brass-soft);
-  box-shadow: 0 0 8px rgba(194, 162, 74, 0.7), 0 0 0 1px rgba(120, 96, 36, 0.6);
+  box-shadow: 0 0 4px rgba(194, 162, 74, 0.5), 0 0 0 1px rgba(120, 96, 36, 0.6);
   transform: translateX(-50%);
   pointer-events: none;
 }
