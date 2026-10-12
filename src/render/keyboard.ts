@@ -74,3 +74,58 @@ export function indexKeys(keys: KeyGeometry[]): Map<number, KeyGeometry> {
   for (const k of keys) map.set(k.midi, k);
   return map;
 }
+
+/** Stray notes at either end the zoom may ignore: at most this share of all notes… */
+const OUTLIER_SHARE = 0.03;
+/** …and only if this many semitones separate them from the rest. */
+const OUTLIER_GAP = 4;
+
+/**
+ * Lowest/highest pitch worth zooming the keyboard to. Transcription leaves the
+ * odd ghost note far above or below the music (overtones, thumps); one of those
+ * must not widen the keyboard by an octave. A tail of at most 3% of the notes
+ * (at least 2) is ignored when a gap of a major third or more separates it from
+ * the rest. Returns the kept range and how many notes fell outside it.
+ */
+export function robustPitchRange(midis: number[]): { lo: number; hi: number; outside: number } {
+  const p = [...midis].sort((a, b) => a - b);
+  const n = p.length;
+  if (!n) return { lo: 60, hi: 60, outside: 0 };
+  const k = Math.min(Math.floor((n - 1) / 2), Math.max(2, Math.ceil(n * OUTLIER_SHARE)));
+  // Largest tail (≤ k notes) that sits apart from the rest by OUTLIER_GAP.
+  let dropLo = 0;
+  for (let j = k; j >= 1; j--) {
+    if (p[j] - p[j - 1] >= OUTLIER_GAP) {
+      dropLo = j;
+      break;
+    }
+  }
+  let dropHi = 0;
+  for (let j = k; j >= 1; j--) {
+    if (p[n - j] - p[n - j - 1] >= OUTLIER_GAP) {
+      dropHi = j;
+      break;
+    }
+  }
+  return { lo: p[dropLo], hi: p[n - 1 - dropHi], outside: dropLo + dropHi };
+}
+
+/**
+ * The keyboard range to show for a song: its pitch range (stray outliers
+ * ignored) plus a little margin, at least ~2 octaves, snapped to white keys.
+ */
+export function keyboardRange(notes: { midi: number }[]): { lo: number; hi: number } {
+  if (!notes.length) return { lo: 48, hi: 84 };
+  const r = robustPitchRange(notes.map((n) => n.midi));
+  let lo = Math.max(MIN_MIDI, r.lo - 2);
+  let hi = Math.min(MAX_MIDI, r.hi + 2);
+  // Too narrow a range makes comically wide keys — widen around the centre.
+  while (hi - lo < 24) {
+    if (lo > MIN_MIDI) lo--;
+    if (hi < MAX_MIDI) hi++;
+    if (lo === MIN_MIDI && hi === MAX_MIDI) break;
+  }
+  while (lo > MIN_MIDI && isBlackKey(lo)) lo--;
+  while (hi < MAX_MIDI && isBlackKey(hi)) hi++;
+  return { lo, hi };
+}

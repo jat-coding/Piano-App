@@ -1,7 +1,7 @@
 import type { NoteEvent, Song, Hand } from '../types';
 import { computeKeyboard, indexKeys, isBlackKey, type KeyGeometry } from './keyboard';
 import { HandAnimator } from '../hands/handPose';
-import { drawHands } from '../hands/drawHands';
+import { drawHands, type HandGeometry } from '../hands/drawHands';
 import { keyU } from '../hands/fingering';
 
 /** Cascade palette — keep in sync with :root in index.css (the video export reuses it). */
@@ -23,6 +23,26 @@ export const COLORS = {
   left: '#5f8a96', // dusty teal-blue
   leftDark: '#3c5b64',
 };
+
+/** Hands never shrink below this many CSS px per white key (88 keys on a phone are narrow). */
+const MIN_HAND_UNIT = 12;
+
+/** A lit key: by which hand, and whether a finger is on it or only the pedal holds it. */
+interface Lit {
+  hand: Hand;
+  sustained: boolean;
+}
+
+function handRgb(hand: Hand): string {
+  return hand === 'left' ? '95,138,150' : '211,154,82';
+}
+
+/** Space the page keeps over the canvas edges (control bar, notch/home-indicator safe areas). */
+export interface StageInsets {
+  left: number;
+  right: number;
+  bottom: number;
+}
 
 export function noteColor(hand: Hand, black: boolean): string {
   if (hand === 'left') return black ? COLORS.leftDark : COLORS.left;
@@ -68,6 +88,7 @@ export class Renderer {
   private whiteW = 0;
   private handRoom = 0;
   private laidOutHands = false;
+  private insets: StageInsets = { left: 0, right: 0, bottom: 0 };
   // Fingering + hand poses for the current song, built the first time hands are drawn.
   private hands: HandAnimator | null = null;
 
@@ -127,6 +148,17 @@ export class Renderer {
     this.flashes.set(midi, performance.now() + 170);
   }
 
+  /**
+   * Keep the keyboard and hands clear of whatever overlays the canvas edges: the
+   * control bar at the bottom, and the safe areas (notch, home indicator).
+   */
+  setInsets(insets: StageInsets): void {
+    const i = this.insets;
+    if (i.left === insets.left && i.right === insets.right && i.bottom === insets.bottom) return;
+    this.insets = { ...insets };
+    if (this.cssW) this.layout();
+  }
+
   /** Resize backing store for crisp retina rendering; recompute key geometry. */
   resize(cssW: number, cssH: number): void {
     this.dpr = Math.min(window.devicePixelRatio || 1, 3);
@@ -141,8 +173,14 @@ export class Renderer {
   }
 
   private layout(): void {
-    const { cssW, cssH } = this;
-    const kb = computeKeyboard(cssW);
+    const { cssW, cssH, insets } = this;
+    const left = Math.min(insets.left, cssW * 0.2);
+    const right = Math.min(insets.right, cssW * 0.2);
+    const kb = computeKeyboard(cssW - left - right);
+    for (const k of kb.keys) {
+      k.x += left;
+      k.cx += left;
+    }
     this.keys = kb.keys;
     this.keyByMidi = indexKeys(kb.keys);
     this.whiteW = kb.whiteWidth;
@@ -151,8 +189,11 @@ export class Renderer {
     this.keyboardHeight = Math.max(70, Math.min(150, cssH * 0.16));
     // With hands on, leave a strip under the keys for the palms.
     this.laidOutHands = this.opts.showHands;
-    this.handRoom = this.opts.showHands ? Math.round(Math.max(14, Math.min(110, this.whiteW * 3))) : 0;
-    this.strikeY = cssH - this.keyboardHeight - this.handRoom;
+    const unit = Math.max(this.whiteW, MIN_HAND_UNIT);
+    this.handRoom = this.opts.showHands ? Math.round(Math.max(14, Math.min(110, unit * 3))) : 0;
+    // Everything sits above the control bar, which overlays the bottom of the canvas.
+    const bottom = Math.min(insets.bottom, cssH * 0.45);
+    this.strikeY = cssH - bottom - this.keyboardHeight - this.handRoom;
   }
 
   /** Draw one frame at the given transport time (seconds). */
@@ -186,11 +227,12 @@ export class Renderer {
 
     this.drawOctaveGuides();
 
-    const active = this.song ? this.drawFallingNotes(currentTime) : new Map<number, Hand>();
+    if (this.opts.showHands && this.song?.notes.length && !this.hands) this.hands = new HandAnimator(this.song.notes);
+    const active = this.song ? this.drawFallingNotes(currentTime) : new Map<number, Lit>();
 
     // Spawn a burst for any key that just became active this frame.
     if (this.opts.impacts) {
-      for (const [midi, hand] of active) {
+      for (const [midi, { hand }] of active) {
         if (!this.prevActive.has(midi)) this.spawnImpact(midi, hand);
       }
     }
@@ -207,24 +249,20 @@ export class Renderer {
     const top = this.strikeY + this.keyboardHeight;
     ctx.fillStyle = COLORS.bgTop;
     ctx.fillRect(0, top, cssW, this.cssH - top);
-    if (!this.song || !this.song.notes.length) return;
-    if (!this.hands) this.hands = new HandAnimator(this.song.notes);
+    if (!this.song || !this.song.notes.length || !this.hands) return;
+    const x0 = this.keys[0].x;
     const u0 = keyU(this.keys[0].midi) - 0.5;
     const ww = this.whiteW;
-    drawHands(
-      ctx,
-      this.hands,
-      currentTime,
-      {
-        uToX: (u) => (u - u0) * ww,
-        whiteW: ww,
-        strikeY: this.strikeY,
-        kbH: this.keyboardHeight,
-        blackH: this.keyboardHeight * 0.62,
-        pixelRatio: this.dpr,
-      },
-      { left: this.opts.showLeft, right: this.opts.showRight },
-    );
+    const g: HandGeometry = {
+      uToX: (u) => x0 + (u - u0) * ww,
+      whiteW: ww,
+      minUnit: MIN_HAND_UNIT,
+      strikeY: this.strikeY,
+      kbH: this.keyboardHeight,
+      blackH: this.keyboardHeight * 0.62,
+      pixelRatio: this.dpr,
+    };
+    drawHands(ctx, this.hands, currentTime, g, { left: this.opts.showLeft, right: this.opts.showRight });
   }
 
   private spawnImpact(midi: number, hand: Hand): void {
@@ -285,11 +323,13 @@ export class Renderer {
     }
   }
 
-  private drawFallingNotes(currentTime: number): Map<number, Hand> {
+  private drawFallingNotes(currentTime: number): Map<number, Lit> {
     const { ctx } = this;
     const notes = this.song!.notes;
     const pps = this.opts.pixelsPerSecond;
-    const active = new Map<number, Hand>();
+    const active = new Map<number, Lit>();
+    // With hands shown, a note's tail after its finger lets go is drawn as held by the pedal.
+    const hands = this.opts.showHands ? this.hands : null;
 
     const visibleAhead = this.strikeY / pps; // seconds of lookahead on screen
     const maxLookback = 12; // seconds — covers long sustained notes
@@ -312,16 +352,34 @@ export class Renderer {
       const topY = bottomY - height;
       if (topY > this.strikeY || bottomY < 0) continue;
 
+      const end = n.startTime + n.duration;
+      const sus = hands ? hands.sustainFrom(i) : Infinity;
       // Note is being played when the strike line is within its span.
-      if (currentTime >= n.startTime && currentTime <= n.startTime + n.duration) {
-        active.set(n.midi, n.hand);
+      if (currentTime >= n.startTime && currentTime <= end) {
+        const sustained = currentTime >= sus;
+        const prev = active.get(n.midi);
+        if (!prev || prev.sustained) active.set(n.midi, { hand: n.hand, sustained });
       }
 
       const black = isBlackKey(n.midi);
       const w = key.w * (black ? 1 : 0.9);
       const x = key.cx - w / 2;
       const drawTop = Math.max(topY, 0);
-      const drawH = Math.min(bottomY, this.strikeY) - drawTop;
+      const drawBottom = Math.min(bottomY, this.strikeY);
+      if (drawBottom - drawTop <= 0) continue;
+      // Hollow from where the finger lets go (the pedal holds the rest).
+      const susY = sus < end ? Math.max(drawTop, Math.min(drawBottom, this.strikeY - (sus - currentTime) * pps)) : drawTop;
+      if (susY > drawTop) {
+        const rgb = handRgb(n.hand);
+        ctx.fillStyle = `rgba(${rgb},0.2)`;
+        this.roundRect(x, drawTop, w, susY - drawTop, 5);
+        ctx.fill();
+        ctx.strokeStyle = `rgba(${rgb},0.9)`;
+        ctx.lineWidth = 1.5;
+        this.roundRect(x + 0.75, drawTop + 0.75, w - 1.5, susY - drawTop - 1.5, 5);
+        ctx.stroke();
+      }
+      const drawH = drawBottom - susY;
       if (drawH <= 0) continue;
 
       const fill = noteColor(n.hand, black);
@@ -330,14 +388,14 @@ export class Renderer {
         ctx.shadowBlur = 5;
       }
       ctx.fillStyle = fill;
-      this.roundRect(x, drawTop, w, drawH, 5);
+      this.roundRect(x, susY, w, drawH, 5);
       ctx.fill();
       ctx.shadowBlur = 0;
 
       // 1px darker border for definition.
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1;
-      this.roundRect(x + 0.5, drawTop + 0.5, w - 1, drawH - 1, 5);
+      this.roundRect(x + 0.5, susY + 0.5, w - 1, drawH - 1, 5);
       ctx.stroke();
     }
 
@@ -360,14 +418,27 @@ export class Renderer {
     ctx.stroke();
   }
 
-  private drawKeyboard(active: Map<number, Hand>): void {
+  /** A key only the pedal is holding (no finger on it): a dim wash and an outline in the hand colour. */
+  private drawHeldKey(hand: Hand, x: number, y: number, w: number, h: number, wash: number): void {
+    const { ctx } = this;
+    const rgb = handRgb(hand);
+    ctx.fillStyle = `rgba(${rgb},${wash})`;
+    ctx.fillRect(x, y, w, h);
+    const lw = Math.max(1.5, w * 0.12);
+    ctx.strokeStyle = `rgba(${rgb},0.95)`;
+    ctx.lineWidth = lw;
+    ctx.strokeRect(x + lw / 2 + 0.5, y + lw / 2 + 3, w - lw - 1, h - lw - 4);
+  }
+
+  private drawKeyboard(active: Map<number, Lit>): void {
     const { ctx, cssW, strikeY, keyboardHeight } = this;
     const now = performance.now();
 
     // Ivory white keys with a soft top-to-bottom shade.
     for (const key of this.keys) {
       if (key.black) continue;
-      const hand = active.get(key.midi);
+      const lit = active.get(key.midi);
+      const hand = lit && !lit.sustained ? lit.hand : undefined;
       const flashed = (this.flashes.get(key.midi) ?? 0) > now;
       if (hand) {
         ctx.fillStyle = noteColor(hand, false);
@@ -381,6 +452,7 @@ export class Renderer {
         g.addColorStop(1, COLORS.whiteKeyLo);
         ctx.fillStyle = g;
         ctx.fillRect(key.x, strikeY, key.w, keyboardHeight);
+        if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, keyboardHeight, 0.38);
       }
       ctx.strokeStyle = COLORS.keyBorder;
       ctx.lineWidth = 1;
@@ -396,12 +468,14 @@ export class Renderer {
     const blackH = keyboardHeight * 0.62;
     for (const key of this.keys) {
       if (!key.black) continue;
-      const hand = active.get(key.midi);
+      const lit = active.get(key.midi);
+      const hand = lit && !lit.sustained ? lit.hand : undefined;
       const flashed = (this.flashes.get(key.midi) ?? 0) > now;
       ctx.fillStyle = hand ? noteColor(hand, true) : flashed ? COLORS.press : COLORS.blackKey;
       this.roundRect(key.x, strikeY, key.w, blackH, 3);
       ctx.fill();
-      if (!hand && !flashed) {
+      if (lit?.sustained && !flashed) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, blackH, 0.5);
+      else if (!hand && !flashed) {
         ctx.fillStyle = COLORS.blackKeySheen;
         this.roundRect(key.x + 1, strikeY + 1, key.w - 2, blackH * 0.18, 2);
         ctx.fill();

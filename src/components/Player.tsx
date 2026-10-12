@@ -20,6 +20,8 @@ function isMobile(): boolean {
 export function Player() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const probeRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const engineRef = useRef<PlaybackEngine>(new PlaybackEngine());
   const midiRef = useRef<MidiInput>(new MidiInput());
@@ -53,12 +55,29 @@ export function Player() {
     rendererRef.current = renderer;
     const engine = engineRef.current;
 
+    // Keep the keyboard and hands above the control bar and inside the safe areas
+    // (notch, home indicator). offsetTop ignores the bar's hide/show transform, so
+    // the keyboard doesn't jump when the controls auto-hide.
+    const applyInsets = () => {
+      const bar = barRef.current;
+      const probe = probeRef.current;
+      const cs = probe ? getComputedStyle(probe) : null;
+      const px = (v: string | undefined) => parseFloat(v ?? '') || 0;
+      renderer.setInsets({
+        left: px(cs?.paddingLeft),
+        right: px(cs?.paddingRight),
+        bottom: bar ? container.clientHeight - bar.offsetTop : px(cs?.paddingBottom),
+      });
+    };
     const ro = new ResizeObserver(() => {
       const r = container.getBoundingClientRect();
+      applyInsets();
       renderer.resize(r.width, r.height);
     });
     ro.observe(container);
+    if (barRef.current) ro.observe(barRef.current);
     const r0 = container.getBoundingClientRect();
+    applyInsets();
     renderer.resize(r0.width, r0.height);
 
     setLoadingAudio(true);
@@ -302,13 +321,14 @@ export function Player() {
         }}
       />
 
+      <div ref={probeRef} className="safe-probe" aria-hidden="true" />
       {loadingAudio && <div className="audio-loading">Loading piano…</div>}
       {waiting && <div className="wait-hint">Waiting — play the green keys (tap or MIDI)</div>}
 
       <CleanupPanel />
       <Settings onToggleMidi={toggleMidi} />
 
-      <div className="bottom-bar">
+      <div ref={barRef} className="bottom-bar">
         <Scrubber onSeek={seek} />
         <Controls
           onPlayPause={playPause}

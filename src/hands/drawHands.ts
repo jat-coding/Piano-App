@@ -12,6 +12,12 @@ export interface HandGeometry {
   /** White-key units (keyU) → canvas x. */
   uToX: (u: number) => number;
   whiteW: number;
+  /**
+   * Smallest size unit for the hand itself (px per white key). On a wide zoom the
+   * keys get narrow; fingertips still land on key centres, but the hand doesn't
+   * shrink below this.
+   */
+  minUnit?: number;
   strikeY: number;
   kbH: number;
   blackH: number;
@@ -55,17 +61,22 @@ interface Pts {
   w: number;
 }
 
+/** The hand's size unit: the white-key width, but never below the geometry's minimum. */
+export function handUnit(g: HandGeometry): number {
+  return Math.max(g.whiteW, g.minUnit ?? 0);
+}
+
 function layout(pose: HandPose, g: HandGeometry): Pts {
-  const w = g.whiteW;
+  const w = handUnit(g);
   const dir = pose.hand === 'right' ? 1 : -1;
-  const blackTipY = g.strikeY + g.blackH - 0.75 * w;
+  const blackTipY = Math.max(g.strikeY + g.blackH * 0.35, g.strikeY + g.blackH - 0.75 * w);
   // Knuckles just in front of the keys; on very long keys, the hand sits on them
   // so a finger can still reach a black key without growing.
   const kY = Math.min(g.strikeY + g.kbH + 0.9 * w, blackTipY + 3.6 * w);
   // White keys are played just in front of the black keys, as pianists do.
-  const whiteTipY = Math.max(
-    g.strikeY + g.blackH + 0.4 * w,
-    Math.min(kY - 2.5 * w, g.strikeY + g.kbH - 0.45 * w),
+  const whiteTipY = Math.min(
+    g.strikeY + g.kbH * 0.92,
+    Math.max(g.strikeY + g.blackH + 0.4 * w, Math.min(kY - 2.5 * w, g.strikeY + g.kbH - 0.45 * w)),
   );
   const tip: Pts['tip'] = [{ x: 0, y: 0 }];
   for (let f = 1; f <= 5; f++) {
@@ -227,7 +238,7 @@ function paintShadow(ctx: CanvasRenderingContext2D, pose: HandPose, p: Pts): voi
 
 function drawOne(ctx: CanvasRenderingContext2D, pose: HandPose, g: HandGeometry, alpha: number): void {
   const p = layout(pose, g);
-  const w = g.whiteW;
+  const w = p.w;
   paintShadow(ctx, pose, p);
 
   // Draw the hand opaque into a scratch canvas, then lay it down translucent:

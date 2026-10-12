@@ -485,6 +485,15 @@ body,
   width: 100%;
   height: 100%;
 }
+/* Invisible; its padding reports the safe areas so the canvas keyboard can avoid them. */
+.safe-probe {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
 .audio-loading {
   position: absolute;
   top: 14px;
@@ -1459,8 +1468,20 @@ body,
   }
 }
 
+/* ---------- Phones: the speed presets don't fit beside 44px touch targets ----------
+   (they overlapped the loop and hand buttons in iPhone landscape; the slider still sets speed) */
+@media (pointer: coarse) and (max-width: 900px) {
+  .presets {
+    display: none;
+  }
+}
+
 /* ---------- Short viewports (phone landscape): keep dialogs from overflowing ---------- */
 @media (max-height: 480px) {
+  .bottom-bar {
+    padding-top: 6px;
+    gap: 4px;
+  }
   .trim-card {
     padding: 16px;
   }

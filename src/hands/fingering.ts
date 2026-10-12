@@ -21,6 +21,14 @@ export interface NoteFingering {
   hand: PlayHand;
   /** null = the note can't be reached by that hand without contorting it. */
   finger: Finger | null;
+  /**
+   * When the finger must have left the key, at the latest (song seconds). Equal
+   * to the note's end unless the hand has to move on while the note still sounds
+   * (a later note would stretch the hand too far, or needs that finger): then it
+   * is the onset of the event that forces the release, and the rest of the note
+   * is held by the pedal, not a finger.
+   */
+  releaseBy: number;
 }
 
 export interface HandEvent {
@@ -29,6 +37,8 @@ export interface HandEvent {
   notes: number[];
   /** Finger per entry of `notes` (null = unreachable, played by nobody). */
   fingers: (Finger | null)[];
+  /** Earlier notes still under a finger when this event is struck (their fingers stay put). */
+  held: { note: number; finger: Finger }[];
   /** Where the thumb would rest, in white-key units (see keyU). */
   handU: number;
 }
@@ -47,6 +57,8 @@ export interface FingeringOptions {
   chordWindow?: number;
   /** Hand a too-wide chord's edge notes to the other hand when it is free. */
   moveOverflow?: boolean;
+  /** Notes the hands should ignore (e.g. off the visible keyboard). They get no finger. */
+  skip?: (index: number) => boolean;
 }
 
 // ---------- keyboard geometry in physical units ----------
@@ -73,22 +85,30 @@ export function keyU(midi: number): number {
 /** Natural resting offset of each finger from the thumb, white keys (right hand). */
 export const REST_U = [0, 0, 1, 2, 3, 4]; // index 0 unused
 
-// ---------- Parncutt span table (semitones, right hand) ----------
+// ---------- Span table (semitones, right hand) ----------
 // [minPrac, minComf, minRel, maxRel, maxComf, maxPrac] for finger pair (a<b).
 // Distance d = pitch(b) − pitch(a) for the right hand, mirrored for the left.
+// Based on Parncutt et al., but the practical maxima are capped so a drawn hand
+// never splays wider than an octave thumb-to-little-finger: a 9th or 10th is
+// within reach for big hands, yet on screen it reads as a spider. Notes held at
+// once beyond these limits are handed to the other hand, released to the pedal,
+// or marked unreachable (see assignFingering).
 type Span = [number, number, number, number, number, number];
 const SPAN: Record<string, Span> = {
-  '12': [-5, -3, 1, 5, 8, 10],
-  '13': [-4, -2, 3, 7, 10, 12],
-  '14': [-3, -1, 5, 9, 12, 14],
-  '15': [-1, 1, 7, 10, 13, 15],
-  '23': [1, 1, 1, 2, 3, 5],
-  '24': [1, 1, 3, 4, 5, 7],
-  '25': [2, 2, 5, 6, 8, 10],
-  '34': [1, 1, 1, 2, 2, 4],
-  '35': [1, 1, 3, 4, 5, 7],
-  '45': [1, 1, 1, 2, 3, 5],
+  '12': [-5, -3, 1, 5, 8, 9],
+  '13': [-4, -2, 3, 7, 10, 10],
+  '14': [-3, -1, 5, 9, 11, 11],
+  '15': [-1, 1, 7, 10, 12, 12],
+  '23': [1, 1, 1, 2, 3, 4],
+  '24': [1, 1, 3, 4, 5, 6],
+  '25': [2, 2, 5, 6, 8, 9],
+  '34': [1, 1, 1, 2, 2, 3],
+  '35': [1, 1, 3, 4, 5, 6],
+  '45': [1, 1, 1, 2, 3, 4],
 };
+
+/** Widest interval one hand may hold at once, thumb to little finger (semitones). */
+export const MAX_HAND_SPAN = SPAN['15'][5];
 
 const W = {
   stretch: 2, // per semitone past the comfortable span
@@ -103,6 +123,7 @@ const W = {
   sameFinger: 1.5, // same finger, new key
   sameFingerPerSemi: 0.4,
   heldConflict: 4, // reusing / crossing a finger that is still holding a note
+  heldStretch: 2, // a held note and a new one too far apart: the held one must let go early
   moveBase: 0.5, // per white key the hand shifts…
   moveUrgency: 0.12, // …plus this ÷ the time available
 };
@@ -266,6 +287,7 @@ function transitionCost(hand: PlayHand, a: Ev, sa: State, b: Ev, sb: State): num
       else {
         const above = spanDist(hand, a.pitch[i], b.pitch[j]) > 0; // b is "outward" in finger order
         if (above !== fb > fh) c += W.heldConflict;
+        else if (chordPairCost(hand, fh, a.pitch[i], fb, b.pitch[j]) >= INFEASIBLE) c += W.heldStretch;
       }
     }
   }
@@ -352,8 +374,16 @@ export function assignFingering(notes: NoteEvent[], opts: FingeringOptions = {})
   const win = opts.chordWindow ?? 0.035;
   const moveOverflow = opts.moveOverflow ?? true;
   const handOf: PlayHand[] = notes.map((n) => (n.hand === 'left' ? 'left' : 'right'));
-  const perNote: NoteFingering[] = handOf.map((hand) => ({ hand, finger: null }));
-  const byStart = notes.map((_, i) => i).sort((a, b) => notes[a].startTime - notes[b].startTime);
+  const perNote: NoteFingering[] = handOf.map((hand, i) => ({
+    hand,
+    finger: null,
+    releaseBy: notes[i].startTime + notes[i].duration,
+  }));
+  const skip = opts.skip;
+  const byStart = notes
+    .map((_, i) => i)
+    .filter((i) => !skip?.(i))
+    .sort((a, b) => notes[a].startTime - notes[b].startTime);
 
   // Pass 1: find chords one hand can't span; hand their edge notes over if the
   // other hand has no onset nearby, otherwise they stay unreachable.
@@ -408,9 +438,68 @@ export function assignFingering(notes: NoteEvent[], opts: FingeringOptions = {})
     evs.forEach((e, k) => {
       const st = path[k];
       e.idx.forEach((ni, j) => (perNote[ni].finger = st.fingers[j]));
-      events[hand].push({ time: e.time, notes: e.idx, fingers: st.fingers, handU: st.handU });
+      events[hand].push({ time: e.time, notes: e.idx, fingers: st.fingers, handU: st.handU, held: [] });
     });
+    // Pass 3: which earlier notes stay under their fingers at each event, and
+    // which must let go early because the hand moves on (pedal holds the sound).
+    trackHeld(hand, events[hand], notes, perNote);
   }
 
   return { perNote, events, moved, unreachable: unreachable.size };
+}
+
+/**
+ * Walk one hand's events in order, keeping each still-sounding note under its
+ * finger while that finger isn't needed and the hand isn't stretched past what
+ * one hand can hold. Otherwise the note's finger is released by the event that
+ * forces it (`releaseBy`), farthest-from-the-new-notes first.
+ */
+function trackHeld(hand: PlayHand, evs: HandEvent[], notes: NoteEvent[], perNote: NoteFingering[]): void {
+  type Held = { note: number; finger: Finger; pitch: number; end: number };
+  let held: Held[] = [];
+  const release = (h: Held, t: number) => {
+    perNote[h.note].releaseBy = Math.min(perNote[h.note].releaseBy, t);
+  };
+  for (const e of evs) {
+    // Notes that end around now just end; a finger is never "held" past its note.
+    held = held.filter((h) => h.end > e.time + 0.05);
+    const pitches = e.notes.map((ni) => notes[ni].midi);
+    const used = new Set(e.fingers);
+    let keep: Held[] = [];
+    for (const h of held) {
+      if (used.has(h.finger) || pitches.includes(h.pitch)) release(h, e.time);
+      else keep.push(h);
+    }
+    // Everything under a finger at once must fit one hand.
+    const centre = pitches.reduce((a, b) => a + b, 0) / Math.max(1, pitches.length);
+    for (;;) {
+      const all = [
+        ...keep.map((h) => ({ f: h.finger, p: h.pitch })),
+        ...e.fingers.map((f, j) => ({ f: f as Finger, p: pitches[j] })),
+      ];
+      let bad = false;
+      for (let i = 0; i < all.length && !bad; i++) {
+        for (let j = i + 1; j < all.length && !bad; j++) {
+          if (chordPairCost(hand, all[i].f, all[i].p, all[j].f, all[j].p) >= INFEASIBLE) bad = true;
+        }
+      }
+      if (!bad || !keep.length) break;
+      let far = 0;
+      for (let k = 1; k < keep.length; k++) {
+        if (Math.abs(keep[k].pitch - centre) > Math.abs(keep[far].pitch - centre)) far = k;
+      }
+      release(keep[far], e.time);
+      keep = keep.filter((_, k) => k !== far);
+    }
+    e.held = keep.map((h) => ({ note: h.note, finger: h.finger }));
+    held = [
+      ...keep,
+      ...e.notes.map((ni, j) => ({
+        note: ni,
+        finger: e.fingers[j] as Finger,
+        pitch: notes[ni].midi,
+        end: notes[ni].startTime + notes[ni].duration,
+      })),
+    ];
+  }
 }

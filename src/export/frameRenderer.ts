@@ -1,6 +1,5 @@
 import type { Hand, NoteEvent, Song } from '../types';
-import { MIN_MIDI, MAX_MIDI } from '../types';
-import { computeKeyboard, indexKeys, isBlackKey, type KeyGeometry } from '../render/keyboard';
+import { computeKeyboard, indexKeys, isBlackKey, keyboardRange, type KeyGeometry } from '../render/keyboard';
 import { COLORS, noteColor } from '../render/Renderer';
 import type { VideoPicture } from './videoSource';
 import { HandAnimator } from '../hands/handPose';
@@ -17,32 +16,24 @@ const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const DISPLAY = "'Fraunces', Georgia, 'Times New Roman', serif";
 const INK = '#14110d';
 const IVORY = '#f1e7d0';
+/** Hands never shrink below this many px per white key, however wide the zoom. */
+const MIN_HAND_UNIT = 34;
+
+/** A key that is lit: by which hand, and whether a finger is on it or the pedal holds it. */
+interface Lit {
+  hand: Hand;
+  sustained: boolean;
+}
+
+export function handRgb(hand: Hand): string {
+  return hand === 'left' ? '95,138,150' : '211,154,82';
+}
 
 export function noteName(midi: number): string {
   return NAMES[((midi % 12) + 12) % 12];
 }
 
-/** The song's pitch range plus a little margin, snapped to white keys, at least ~2 octaves. */
-export function keyboardRange(notes: NoteEvent[]): { lo: number; hi: number } {
-  if (!notes.length) return { lo: 48, hi: 84 };
-  let lo = MAX_MIDI;
-  let hi = MIN_MIDI;
-  for (const n of notes) {
-    if (n.midi < lo) lo = n.midi;
-    if (n.midi > hi) hi = n.midi;
-  }
-  lo = Math.max(MIN_MIDI, lo - 2);
-  hi = Math.min(MAX_MIDI, hi + 2);
-  // Too narrow a range makes comically wide keys — widen around the centre.
-  while (hi - lo < 24) {
-    if (lo > MIN_MIDI) lo--;
-    if (hi < MAX_MIDI) hi++;
-    if (lo === MIN_MIDI && hi === MAX_MIDI) break;
-  }
-  while (lo > MIN_MIDI && isBlackKey(lo)) lo--;
-  while (hi < MAX_MIDI && isBlackKey(hi)) hi++;
-  return { lo, hi };
-}
+export { keyboardRange } from '../render/keyboard';
 
 /**
  * Deterministic 1080x1920 frame painter for video export. Unlike the live
@@ -90,6 +81,7 @@ export class ExportFrameRenderer {
     this.whiteW = kb.whiteWidth;
 
     const footer = 84;
+    const handUnit = Math.max(this.whiteW, MIN_HAND_UNIT);
     this.videoH = layout === 'video' ? EXPORT_H / 2 : 0;
     this.notesTop = this.videoH;
     const kbMin = layout === 'video' ? 150 : 200;
@@ -97,16 +89,18 @@ export class ExportFrameRenderer {
     this.kbH = Math.round(Math.max(kbMin, Math.min(kbMax, this.whiteW * 5)));
     this.footerTop = EXPORT_H - footer;
     // Room under the keys for the palms (fingers lie on the keys, wrists below them).
-    const handRoom = showHands ? Math.round(Math.min(EXPORT_H * 0.12, this.whiteW * 3.6)) : 0;
+    const handRoom = showHands ? Math.round(Math.min(EXPORT_H * 0.12, handUnit * 3.6)) : 0;
     this.handRoomTop = this.footerTop - handRoom;
     this.strikeY = this.handRoomTop - this.kbH;
     if (showHands && song.notes.length) {
-      this.hands = new HandAnimator(song.notes);
+      // Notes off the zoomed keyboard (stray transcription notes) aren't played by the hands.
+      this.hands = new HandAnimator(song.notes, { skip: (i) => !this.keyByMidi.has(song.notes[i].midi) });
       const u0 = keyU(lo) - 0.5;
       const ww = this.whiteW;
       this.handGeom = {
         uToX: (u) => (u - u0) * ww,
         whiteW: ww,
+        minUnit: MIN_HAND_UNIT,
         strikeY: this.strikeY,
         kbH: this.kbH,
         blackH: this.kbH * 0.62,
@@ -194,10 +188,10 @@ export class ExportFrameRenderer {
     ctx.stroke();
   }
 
-  private drawNotes(t: number): Map<number, Hand> {
+  private drawNotes(t: number): Map<number, Lit> {
     const { ctx, pps } = this;
     const notes = this.notes;
-    const active = new Map<number, Hand>();
+    const active = new Map<number, Lit>();
     const ahead = (this.strikeY - this.notesTop) / pps;
     const radius = Math.min(10, this.whiteW * 0.2);
 
@@ -207,38 +201,78 @@ export class ExportFrameRenderer {
       const end = n.startTime + n.duration;
       if (end < t) continue;
       const key = this.keyByMidi.get(n.midi);
-      if (!key) continue;
-      if (t >= n.startTime && t < end) active.set(n.midi, n.hand);
-
       const bottomY = this.strikeY - (n.startTime - t) * pps;
       const topY = bottomY - Math.max(n.duration * pps, 6);
       const drawTop = Math.max(topY, this.notesTop);
       const drawBottom = Math.min(bottomY, this.strikeY);
       const h = drawBottom - drawTop;
+      if (!key) {
+        // A stray note off the zoomed keyboard: a thin sliver at that edge, so
+        // nothing heard goes unshown, without widening the whole keyboard for it.
+        if (h > 0) this.drawEdgeNote(n, drawTop, h);
+        continue;
+      }
+      // From `sus` on, no finger is on the key: the pedal holds the note.
+      const sus = this.hands ? this.hands.sustainFrom(i) : Infinity;
+      if (t >= n.startTime && t < end) {
+        const sustained = t >= sus;
+        const prev = active.get(n.midi);
+        if (!prev || prev.sustained) active.set(n.midi, { hand: n.hand, sustained });
+      }
       if (h <= 0) continue;
 
       const black = isBlackKey(n.midi);
       const w = black ? key.w : key.w * 0.86;
       const x = key.cx - w / 2;
       const fill = noteColor(n.hand, black);
-      ctx.fillStyle = fill;
-      roundRect(ctx, x, drawTop, w, h, radius);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-      ctx.lineWidth = 2;
-      roundRect(ctx, x + 1, drawTop + 1, w - 2, h - 2, radius);
-      ctx.stroke();
-      // Soft highlight down the left edge so bars read as solid, not flat stickers.
-      ctx.fillStyle = 'rgba(255,240,210,0.16)';
-      ctx.fillRect(x + 3, drawTop + 3, Math.max(2, w * 0.14), Math.max(0, h - 6));
-
-      this.drawLetter(n.midi, black, x, w, drawBottom, h);
+      // The part of the bar after the finger lets go is drawn hollow (held by the pedal).
+      const susY = sus < end ? Math.max(drawTop, Math.min(drawBottom, this.strikeY - (sus - t) * pps)) : drawTop;
+      if (susY > drawTop) this.drawHeldTail(n.hand, x, drawTop, w, susY - drawTop + (susY < drawBottom ? radius : 0), radius);
+      const sh = drawBottom - susY;
+      if (sh > 0) {
+        ctx.fillStyle = fill;
+        roundRect(ctx, x, susY, w, sh, radius);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.lineWidth = 2;
+        roundRect(ctx, x + 1, susY + 1, w - 2, sh - 2, radius);
+        ctx.stroke();
+        // Soft highlight down the left edge so bars read as solid, not flat stickers.
+        ctx.fillStyle = 'rgba(255,240,210,0.16)';
+        ctx.fillRect(x + 3, susY + 3, Math.max(2, w * 0.14), Math.max(0, sh - 6));
+        this.drawLetter(n.midi, black, x, w, drawBottom, sh);
+      } else if (bottomY <= this.strikeY) {
+        // Not reachable by any finger at all: hollow from the start, still named.
+        this.drawLetter(n.midi, black, x, w, drawBottom, drawBottom - drawTop, IVORY);
+      }
     }
     return active;
   }
 
+  /** A note's pedal-held stretch: a hollow outline in the hand colour over a faint wash. */
+  private drawHeldTail(hand: Hand, x: number, y: number, w: number, h: number, radius: number): void {
+    const { ctx } = this;
+    const rgb = handRgb(hand);
+    ctx.fillStyle = `rgba(${rgb},0.2)`;
+    roundRect(ctx, x, y, w, h, radius);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(${rgb},0.9)`;
+    ctx.lineWidth = 3;
+    roundRect(ctx, x + 1.5, y + 1.5, w - 3, h - 3, radius);
+    ctx.stroke();
+  }
+
+  private drawEdgeNote(n: NoteEvent, top: number, h: number): void {
+    const { ctx } = this;
+    const w = Math.max(6, this.whiteW * 0.22);
+    const x = n.midi < this.keys[0].midi ? 2 : EXPORT_W - w - 2;
+    ctx.fillStyle = `rgba(${handRgb(n.hand)},0.6)`;
+    roundRect(ctx, x, top, w, h, w / 2);
+    ctx.fill();
+  }
+
   /** The note's letter, printed at the leading (bottom) end of its bar. */
-  private drawLetter(midi: number, black: boolean, x: number, w: number, bottom: number, h: number): void {
+  private drawLetter(midi: number, black: boolean, x: number, w: number, bottom: number, h: number, color?: string): void {
     const { ctx } = this;
     const letter = noteName(midi)[0];
     const sharp = black;
@@ -249,7 +283,7 @@ export class ExportFrameRenderer {
     if (h < need) return; // too short to hold a legible letter
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = black ? IVORY : INK;
+    ctx.fillStyle = color ?? (black ? IVORY : INK);
     const cx = x + w / 2;
     let base = bottom - Math.max(6, size * 0.3);
     if (sharp) {
@@ -261,16 +295,16 @@ export class ExportFrameRenderer {
     ctx.fillText(letter, cx, base, w - 2);
   }
 
-  private drawStrike(active: Map<number, Hand>): void {
+  private drawStrike(active: Map<number, Lit>): void {
     const { ctx, strikeY } = this;
-    // Light rising off every held key, in the hand's colour.
-    for (const [midi, hand] of active) {
+    // Light rising off every held key, in the hand's colour (fainter once only the pedal holds it).
+    for (const [midi, { hand, sustained }] of active) {
       const key = this.keyByMidi.get(midi);
       if (!key) continue;
       const g = ctx.createLinearGradient(0, strikeY - 70, 0, strikeY);
-      const c = hand === 'left' ? '95,138,150' : '211,154,82';
+      const c = handRgb(hand);
       g.addColorStop(0, `rgba(${c},0)`);
-      g.addColorStop(1, `rgba(${c},0.45)`);
+      g.addColorStop(1, `rgba(${c},${sustained ? 0.2 : 0.45})`);
       ctx.fillStyle = g;
       ctx.fillRect(key.cx - key.w, strikeY - 70, key.w * 2, 70);
     }
@@ -278,15 +312,17 @@ export class ExportFrameRenderer {
     ctx.fillRect(0, strikeY - 2, EXPORT_W, 3);
   }
 
-  private drawKeyboard(active: Map<number, Hand>): void {
+  private drawKeyboard(active: Map<number, Lit>): void {
     const { ctx, strikeY, kbH } = this;
     const labelSize = Math.max(14, Math.min(26, this.whiteW * 0.42));
 
     for (const key of this.keys) {
       if (key.black) continue;
-      const hand = active.get(key.midi);
+      const lit = active.get(key.midi);
+      const hand = lit && !lit.sustained ? lit.hand : undefined;
       ctx.fillStyle = hand ? noteColor(hand, false) : this.whiteKeyGrad;
       ctx.fillRect(key.x, strikeY, key.w, kbH);
+      if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, kbH, 0.38);
       ctx.strokeStyle = COLORS.keyBorder;
       ctx.lineWidth = 2;
       ctx.strokeRect(Math.round(key.x) + 1, strikeY, key.w, kbH);
@@ -307,11 +343,13 @@ export class ExportFrameRenderer {
     const blackH = kbH * 0.62;
     for (const key of this.keys) {
       if (!key.black) continue;
-      const hand = active.get(key.midi);
+      const lit = active.get(key.midi);
+      const hand = lit && !lit.sustained ? lit.hand : undefined;
       ctx.fillStyle = hand ? noteColor(hand, true) : COLORS.blackKey;
       roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
       ctx.fill();
-      if (!hand) {
+      if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, blackH, 0.5);
+      else if (!hand) {
         ctx.fillStyle = 'rgba(216,190,120,0.14)';
         roundRect(ctx, key.x + 3, strikeY + 6, key.w - 6, blackH * 0.2, 3);
         ctx.fill();
@@ -321,6 +359,18 @@ export class ExportFrameRenderer {
       roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
       ctx.stroke();
     }
+  }
+
+  /** A key the pedal is holding (no finger on it): a dim wash and an outline in the hand colour. */
+  private drawHeldKey(hand: Hand, x: number, y: number, w: number, h: number, wash: number): void {
+    const { ctx } = this;
+    const rgb = handRgb(hand);
+    ctx.fillStyle = `rgba(${rgb},${wash})`;
+    ctx.fillRect(x, y, w, h);
+    const lw = Math.max(3, w * 0.1);
+    ctx.strokeStyle = `rgba(${rgb},0.95)`;
+    ctx.lineWidth = lw;
+    ctx.strokeRect(x + lw / 2 + 1, y + lw / 2 + 4, w - lw - 2, h - lw - 6);
   }
 
   private drawFooter(): void {
