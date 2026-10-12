@@ -141,6 +141,37 @@ body,
   font-style: italic;
   font-size: 14px;
 }
+.home-error {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 16px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(122, 47, 51, 0.28);
+  border: 1px solid rgba(255, 122, 122, 0.35);
+  color: #ffd9d9;
+  font-size: 14px;
+  text-align: left;
+}
+.home-error span {
+  flex: 1;
+}
+.home-error button {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0.8;
+}
+.home-error button:hover {
+  opacity: 1;
+}
 .rack {
   position: relative;
   z-index: 1;

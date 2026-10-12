@@ -25,7 +25,7 @@ export function TranscribeOverlay() {
       <div className={`progress-bar${determinate ? '' : ' indeterminate'}`}>
         <div className="progress-fill" style={determinate ? { width: `${pct}%` } : undefined} />
       </div>
-      <p className="progress-num">{determinate ? `${pct}%` : 'Loading model…'}</p>
+      <p className="progress-num">{determinate ? `${pct}%` : 'Please wait…'}</p>
       <p className="disclaimer">
         Audio → MIDI is an estimate (best on clean solo piano). You can clean it up after.
       </p>

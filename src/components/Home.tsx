@@ -59,6 +59,8 @@ export function Home() {
   const setView = useStore((s) => s.setView);
   const libraryVersion = useStore((s) => s.libraryVersion);
   const bumpLibrary = useStore((s) => s.bumpLibrary);
+  const parseError = useStore((s) => s.parseError);
+  const setParseError = useStore((s) => s.setParseError);
   const [songs, setSongs] = useState<SavedSongMeta[]>([]);
   const [chosen, setChosen] = useState<SavedSongMeta | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -79,6 +81,15 @@ export function Home() {
         <h1 className="wordmark">Cascade</h1>
         <p className="home-sub">Your music rack — swipe to choose a piece to learn</p>
       </header>
+
+      {parseError && (
+        <div className="home-error" role="alert">
+          <span>{parseError}</span>
+          <button aria-label="Dismiss" onClick={() => setParseError(null)}>
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="rack">
         <button
