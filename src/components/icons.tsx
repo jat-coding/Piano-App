@@ -145,3 +145,12 @@ export const PianoIcon = (p: IconProps) => (
     <path d="M5 4v6h2.5V4M9.5 4v6H12V4M14.5 4v6H17V4" fill="currentColor" stroke="none" />
   </Stroke>
 );
+
+/** Film frame with a down arrow — "Export video". */
+export const ExportVideoIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M7 3v18M17 3v18" />
+    <path d="M12 8v7M9.5 12.5 12 15l2.5-2.5" />
+  </Stroke>
+);

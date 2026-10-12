@@ -2,7 +2,9 @@ import type { Song, NoteEvent } from '../types';
 
 const DB_NAME = 'cascade';
 const STORE = 'songs';
-const VERSION = 1;
+/** v2 added MEDIA: the original recording for each audio/video song (for video export). */
+const MEDIA = 'media';
+const VERSION = 2;
 
 export type SongKind = 'midi' | 'audio' | 'video';
 
@@ -18,13 +20,32 @@ export interface SavedSong {
 
 export type SavedSongMeta = Omit<SavedSong, 'notes'>;
 
+/**
+ * The original file a song was transcribed from, plus the trimmed selection
+ * (seconds into the file). Kept in its own store, keyed by song id, so listing
+ * the rack never loads the blobs. Songs saved before v2 (and MIDI songs) have none.
+ */
+export interface SongMedia {
+  id: string;
+  kind: 'audio' | 'video';
+  blob: Blob;
+  fileName: string;
+  mimeType: string;
+  trimStart: number;
+  trimEnd: number;
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (e) => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
+      // Additive upgrades only: v1 songs stay untouched in STORE.
+      if (e.oldVersion < 1 && !db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: 'id' });
+      }
+      if (e.oldVersion < 2 && !db.objectStoreNames.contains(MEDIA)) {
+        db.createObjectStore(MEDIA, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -32,12 +53,16 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+function tx<T>(
+  mode: IDBTransactionMode,
+  fn: (store: IDBObjectStore) => IDBRequest<T>,
+  storeName: string = STORE,
+): Promise<T> {
   return openDb().then(
     (db) =>
       new Promise<T>((resolve, reject) => {
-        const t = db.transaction(STORE, mode);
-        const req = fn(t.objectStore(STORE));
+        const t = db.transaction(storeName, mode);
+        const req = fn(t.objectStore(storeName));
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
         t.oncomplete = () => db.close();
@@ -88,4 +113,18 @@ export async function getSong(id: string): Promise<Song | null> {
 
 export async function deleteSong(id: string): Promise<void> {
   await tx('readwrite', (s) => s.delete(id));
+  await tx('readwrite', (s) => s.delete(id), MEDIA);
+}
+
+export async function saveMedia(media: SongMedia): Promise<void> {
+  await tx('readwrite', (s) => s.put(media), MEDIA);
+}
+
+export async function getMedia(id: string): Promise<SongMedia | null> {
+  const rec = await tx<SongMedia | undefined>(
+    'readonly',
+    (s) => s.get(id) as IDBRequest<SongMedia | undefined>,
+    MEDIA,
+  );
+  return rec ?? null;
 }

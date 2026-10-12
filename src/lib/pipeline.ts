@@ -5,23 +5,58 @@ import { transcribe, rederive, cancelTranscription } from './transcribe';
 import { rawToSong } from './cleanup';
 import type { CleanupParams } from './transcribe';
 import type { BuildOptions } from './cleanup';
-import { saveSong, listSongs, deleteSong, getSong, touchSong } from './library';
+import { saveSong, listSongs, deleteSong, getSong, touchSong, saveMedia } from './library';
 import type { Song } from '../types';
 import type { SongKind } from './library';
 
+/** The original recording + the selection that was transcribed (for video export). */
+interface SourceMedia {
+  file: File;
+  trimStart: number;
+  trimEnd: number;
+}
+
+// The save that's in flight, so export can wait for the song id + media to land.
+let persisting: Promise<void> = Promise.resolve();
+
+/** Resolves once the most recently loaded song (and its media) is in the library. */
+export function whenSaved(): Promise<void> {
+  return persisting;
+}
+
 /** Persist a freshly loaded song, replacing any prior copy with the same name. */
-async function persist(song: Song, kind: SongKind): Promise<void> {
-  try {
-    const existing = await listSongs();
-    const dupe = existing.find((s) => s.name === song.name && s.kind === kind);
-    if (dupe) await deleteSong(dupe.id);
-    const saved = await saveSong(song, kind);
-    const s = useStore.getState();
-    s.setCurrentSavedId(saved.id);
-    s.bumpLibrary();
-  } catch (err) {
-    console.warn('Could not save to library', err);
-  }
+function persist(song: Song, kind: SongKind, media?: SourceMedia): Promise<void> {
+  useStore.getState().setCurrentSavedId(null); // never point export at the previous song
+  persisting = (async () => {
+    try {
+      const existing = await listSongs();
+      const dupe = existing.find((s) => s.name === song.name && s.kind === kind);
+      if (dupe) await deleteSong(dupe.id);
+      const saved = await saveSong(song, kind);
+      if (media && kind !== 'midi') {
+        try {
+          await saveMedia({
+            id: saved.id,
+            kind,
+            blob: media.file,
+            fileName: media.file.name,
+            mimeType: media.file.type,
+            trimStart: media.trimStart,
+            trimEnd: media.trimEnd,
+          });
+        } catch (err) {
+          // Usually storage quota. The song still saves; export falls back to a piano re-render.
+          console.warn('Could not keep the original recording', err);
+        }
+      }
+      const s = useStore.getState();
+      s.setCurrentSavedId(saved.id);
+      s.bumpLibrary();
+    } catch (err) {
+      console.warn('Could not save to library', err);
+    }
+  })();
+  return persisting;
 }
 
 // Set true when the user cancels; in-flight decode/transcription bail out quietly.
@@ -111,7 +146,7 @@ export async function loadFile(file: File): Promise<void> {
 
     // Pause here: the user clips the section they want before we transcribe.
     useStore.getState().setTranscribing(false);
-    useStore.getState().setPending(audio, name, kind, audio.length / TARGET_SR);
+    useStore.getState().setPending(audio, name, kind, audio.length / TARGET_SR, file);
   } catch (err) {
     if (cancelled) return;
     console.error(err);
@@ -139,7 +174,9 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
   const start = Math.max(0, Math.floor(startSec * TARGET_SR));
   const end = Math.min(audio.length, Math.floor(endSec * TARGET_SR));
   const slice = end > start ? audio.slice(start, end) : audio;
-  const { pendingName: name, pendingKind: kind } = st;
+  const { pendingName: name, pendingKind: kind, pendingFile: file } = st;
+  const trimStart = start / TARGET_SR;
+  const trimEnd = (end > start ? end : audio.length) / TARGET_SR;
 
   cancelled = false;
   st.clearPending();
@@ -162,7 +199,7 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
     useStore.getState().setShowCleanup(true);
     useStore.getState().setView('player');
     const built = useStore.getState().song;
-    if (built) persist(built, kind);
+    if (built) persist(built, kind, file ? { file, trimStart, trimEnd } : undefined);
   } catch (err) {
     if (cancelled || isAbort(err)) return; // user cancelled — not an error
     console.error(err);

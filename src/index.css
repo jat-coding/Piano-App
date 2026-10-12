@@ -1500,3 +1500,73 @@ body,
     transform: none;
   }
 }
+
+/* ---------- Export video dialog ---------- */
+.export-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  backdrop-filter: blur(3px);
+}
+.export-card {
+  width: min(420px, 92vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: linear-gradient(180deg, var(--mahogany-hi), var(--mahogany-deep));
+  border: 1px solid rgba(255, 220, 170, 0.18);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+.export-card h2 {
+  font-family: var(--display);
+  margin: 0;
+  font-size: 22px;
+  font-weight: 500;
+}
+.export-icon {
+  font-size: 34px;
+}
+.export-plan {
+  text-align: left;
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.export-sub,
+.export-stage {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(241, 231, 208, 0.7);
+}
+.export-stage {
+  font-size: 15px;
+  color: var(--text);
+}
+.export-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--brass-soft);
+  text-align: left;
+}
+.export-error {
+  margin: 0;
+  font-size: 14px;
+  color: #f0b9a8;
+  text-align: left;
+}
+.export-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 8px;
+}

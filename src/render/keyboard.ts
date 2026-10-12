@@ -19,18 +19,23 @@ export interface KeyGeometry {
 }
 
 /**
- * Compute geometry for all 88 keys across a given pixel width.
+ * Compute geometry for the keys lo..hi (default: all 88) across a given pixel width.
+ * lo and hi should be white keys so the edges aren't half a black key.
  *
  * White keys tile evenly; black keys sit at 60% width straddling the boundary
  * between their neighboring white keys, matching real piano geometry.
  */
-export function computeKeyboard(width: number): {
+export function computeKeyboard(
+  width: number,
+  lo: number = MIN_MIDI,
+  hi: number = MAX_MIDI,
+): {
   keys: KeyGeometry[];
   whiteWidth: number;
 } {
   // Count white keys in range to get white-key width.
   let whiteCount = 0;
-  for (let m = MIN_MIDI; m <= MAX_MIDI; m++) if (!isBlackKey(m)) whiteCount++;
+  for (let m = lo; m <= hi; m++) if (!isBlackKey(m)) whiteCount++;
   const whiteWidth = width / whiteCount;
   const blackWidth = whiteWidth * 0.62;
 
@@ -39,7 +44,7 @@ export function computeKeyboard(width: number): {
   // First pass: place white keys left-to-right.
   let whiteIndex = 0;
   const whiteX: Record<number, number> = {};
-  for (let m = MIN_MIDI; m <= MAX_MIDI; m++) {
+  for (let m = lo; m <= hi; m++) {
     if (!isBlackKey(m)) {
       const x = whiteIndex * whiteWidth;
       whiteX[m] = x;
@@ -49,7 +54,7 @@ export function computeKeyboard(width: number): {
   }
 
   // Second pass: place black keys straddling the gap after the prior white key.
-  for (let m = MIN_MIDI; m <= MAX_MIDI; m++) {
+  for (let m = lo; m <= hi; m++) {
     if (isBlackKey(m)) {
       // The white key just below this black key.
       const prevWhite = m - 1;

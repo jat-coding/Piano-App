@@ -44,6 +44,7 @@ interface AppState {
   pendingName: string;
   pendingKind: SongKind;
   pendingDuration: number; // seconds
+  pendingFile: File | null; // the original upload, kept with the song for video export
 
   // ---- Phase 3/4: practice, settings, loop, MIDI ----
   loopA: number | null;
@@ -78,7 +79,13 @@ interface AppState {
   setCleanup: (partial: Partial<CleanupParams>) => void;
   setBuild: (partial: Partial<BuildOptions>) => void;
   setShowCleanup: (v: boolean) => void;
-  setPending: (audio: Float32Array, name: string, kind: SongKind, duration: number) => void;
+  setPending: (
+    audio: Float32Array,
+    name: string,
+    kind: SongKind,
+    duration: number,
+    file: File | null,
+  ) => void;
   clearPending: () => void;
 
   setLoopA: (t: number | null) => void;
@@ -122,6 +129,7 @@ export const useStore = create<AppState>((set) => ({
   pendingName: '',
   pendingKind: 'audio',
   pendingDuration: 0,
+  pendingFile: null,
 
   loopA: null,
   loopB: null,
@@ -165,9 +173,10 @@ export const useStore = create<AppState>((set) => ({
   setCleanup: (partial) => set((s) => ({ cleanup: { ...s.cleanup, ...partial } })),
   setBuild: (partial) => set((s) => ({ build: { ...s.build, ...partial } })),
   setShowCleanup: (showCleanup) => set({ showCleanup }),
-  setPending: (pendingAudio, pendingName, pendingKind, pendingDuration) =>
-    set({ pendingAudio, pendingName, pendingKind, pendingDuration }),
-  clearPending: () => set({ pendingAudio: null, pendingName: '', pendingDuration: 0 }),
+  setPending: (pendingAudio, pendingName, pendingKind, pendingDuration, pendingFile) =>
+    set({ pendingAudio, pendingName, pendingKind, pendingDuration, pendingFile }),
+  clearPending: () =>
+    set({ pendingAudio: null, pendingName: '', pendingDuration: 0, pendingFile: null }),
 
   setLoopA: (loopA) => set({ loopA }),
   setLoopB: (loopB) => set({ loopB }),
@@ -198,6 +207,7 @@ export const useStore = create<AppState>((set) => ({
       pendingAudio: null,
       pendingName: '',
       pendingDuration: 0,
+      pendingFile: null,
       loopA: null,
       loopB: null,
       practiceMode: 'off',

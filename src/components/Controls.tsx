@@ -7,6 +7,7 @@ import {
   CloseIcon,
   PianoIcon,
   SettingsIcon,
+  ExportVideoIcon,
 } from './icons';
 
 interface Props {
@@ -15,11 +16,19 @@ interface Props {
   onRate: (r: number) => void;
   onSetLoopA: () => void;
   onSetLoopB: () => void;
+  onExport: () => void;
 }
 
 const SPEED_PRESETS = [0.5, 0.75, 1, 1.5];
 
-export function Controls({ onPlayPause, onSkip, onRate, onSetLoopA, onSetLoopB }: Props) {
+export function Controls({
+  onPlayPause,
+  onSkip,
+  onRate,
+  onSetLoopA,
+  onSetLoopB,
+  onExport,
+}: Props) {
   const isPlaying = useStore((s) => s.isPlaying);
   const rate = useStore((s) => s.rate);
   const showLeft = useStore((s) => s.showLeft);
@@ -123,6 +132,14 @@ export function Controls({ onPlayPause, onSkip, onRate, onSetLoopA, onSetLoopB }
         >
           <PianoIcon size={18} />
           {modeLabel[practiceMode] && <span className="mode-label">{modeLabel[practiceMode]}</span>}
+        </button>
+        <button
+          className="ctrl-btn small"
+          onClick={onExport}
+          title="Export video"
+          aria-label="Export video"
+        >
+          <ExportVideoIcon size={18} />
         </button>
         <button
           className="ctrl-btn small"

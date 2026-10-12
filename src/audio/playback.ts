@@ -1,10 +1,10 @@
 import * as Tone from 'tone';
 import type { NoteEvent, Song } from '../types';
 
-const SALAMANDER = 'https://tonejs.github.io/audio/salamander/';
+export const SALAMANDER = 'https://tonejs.github.io/audio/salamander/';
 
 // A sparse sample map across the range; the Sampler pitches between them.
-const SAMPLE_URLS: Record<string, string> = {
+export const SAMPLE_URLS: Record<string, string> = {
   A0: 'A0.mp3', C1: 'C1.mp3', 'D#1': 'Ds1.mp3', 'F#1': 'Fs1.mp3',
   A1: 'A1.mp3', C2: 'C2.mp3', 'D#2': 'Ds2.mp3', 'F#2': 'Fs2.mp3',
   A2: 'A2.mp3', C3: 'C3.mp3', 'D#3': 'Ds3.mp3', 'F#3': 'Fs3.mp3',

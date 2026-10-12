@@ -1,7 +1,8 @@
 import type { NoteEvent, Song, Hand } from '../types';
 import { computeKeyboard, indexKeys, isBlackKey, type KeyGeometry } from './keyboard';
 
-const COLORS = {
+/** Cascade palette — keep in sync with :root in index.css (the video export reuses it). */
+export const COLORS = {
   bg: '#14110d', // warm ebony
   bgTop: '#0f0c09',
   guide: 'rgba(194,162,74,0.06)', // faint brass octave lines
@@ -20,7 +21,7 @@ const COLORS = {
   leftDark: '#3c5b64',
 };
 
-function noteColor(hand: Hand, black: boolean): string {
+export function noteColor(hand: Hand, black: boolean): string {
   if (hand === 'left') return black ? COLORS.leftDark : COLORS.left;
   // right + unknown both render as right/orange
   return black ? COLORS.rightDark : COLORS.right;

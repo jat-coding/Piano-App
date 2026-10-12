@@ -8,6 +8,7 @@ import { CleanupPanel } from './CleanupPanel';
 import { Settings } from './Settings';
 import { MidiInput } from '../lib/midiInput';
 import { RotateIcon } from './icons';
+import { ExportDialog } from './ExportDialog';
 
 function isMobile(): boolean {
   return (
@@ -27,6 +28,9 @@ export function Player() {
 
   const [uiVisible, setUiVisible] = useState(true);
   const [portrait, setPortrait] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const exportingRef = useRef(false);
+  exportingRef.current = exporting;
 
   const song = useStore((s) => s.song);
   const setCurrentTime = useStore((s) => s.setCurrentTime);
@@ -202,6 +206,12 @@ export function Player() {
     setLoopB(b);
   }, [setLoopA, setLoopB]);
 
+  const openExport = useCallback(() => {
+    engineRef.current.pause();
+    setPlaying(false);
+    setExporting(true);
+  }, [setPlaying]);
+
   // ---- MIDI keyboard input (wait mode) ----
   const toggleMidi = useCallback(
     async (enabled: boolean) => {
@@ -233,7 +243,7 @@ export function Player() {
   // ---- keyboard shortcuts ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!song) return;
+      if (!song || exportingRef.current) return;
       switch (e.code) {
         case 'Space':
           e.preventDefault();
@@ -305,10 +315,13 @@ export function Player() {
           onRate={changeRate}
           onSetLoopA={setLoopAtA}
           onSetLoopB={setLoopAtB}
+          onExport={openExport}
         />
       </div>
 
-      {portrait && (
+      {exporting && <ExportDialog onClose={() => setExporting(false)} />}
+
+      {portrait && !exporting && (
         <div className="rotate-overlay">
           <div className="rotate-icon">
             <RotateIcon size={56} />
