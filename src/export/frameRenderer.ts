@@ -3,6 +3,9 @@ import { MIN_MIDI, MAX_MIDI } from '../types';
 import { computeKeyboard, indexKeys, isBlackKey, type KeyGeometry } from '../render/keyboard';
 import { COLORS, noteColor } from '../render/Renderer';
 import type { VideoPicture } from './videoSource';
+import { HandAnimator } from '../hands/handPose';
+import { drawHands, type HandGeometry } from '../hands/drawHands';
+import { keyU } from '../hands/fingering';
 
 /** 'full' = falling notes fill the frame; 'video' = source video on top, notes below. */
 export type ExportLayout = 'full' | 'video';
@@ -63,10 +66,14 @@ export class ExportFrameRenderer {
   private bgGrad: CanvasGradient;
   private pool: CanvasGradient;
   private whiteKeyGrad: CanvasGradient;
+  private hands: HandAnimator | null = null;
+  private handGeom: HandGeometry | null = null;
+  private handRoomTop: number;
 
   constructor(
     private song: Song,
     private layout: ExportLayout,
+    showHands = true,
   ) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = EXPORT_W;
@@ -89,7 +96,22 @@ export class ExportFrameRenderer {
     const kbMax = layout === 'video' ? 240 : 340;
     this.kbH = Math.round(Math.max(kbMin, Math.min(kbMax, this.whiteW * 5)));
     this.footerTop = EXPORT_H - footer;
-    this.strikeY = this.footerTop - this.kbH;
+    // Room under the keys for the palms (fingers lie on the keys, wrists below them).
+    const handRoom = showHands ? Math.round(Math.min(EXPORT_H * 0.12, this.whiteW * 3.6)) : 0;
+    this.handRoomTop = this.footerTop - handRoom;
+    this.strikeY = this.handRoomTop - this.kbH;
+    if (showHands && song.notes.length) {
+      this.hands = new HandAnimator(song.notes);
+      const u0 = keyU(lo) - 0.5;
+      const ww = this.whiteW;
+      this.handGeom = {
+        uToX: (u) => (u - u0) * ww,
+        whiteW: ww,
+        strikeY: this.strikeY,
+        kbH: this.kbH,
+        blackH: this.kbH * 0.62,
+      };
+    }
     // How many seconds of music are visible above the keys.
     const lookahead = layout === 'video' ? 2.4 : 3.2;
     this.pps = (this.strikeY - this.notesTop) / lookahead;
@@ -127,6 +149,7 @@ export class ExportFrameRenderer {
     this.drawStrike(active);
     this.drawKeyboard(active);
     this.drawFooter();
+    if (this.hands && this.handGeom) drawHands(ctx, this.hands, t, this.handGeom);
   }
 
   private drawVideo(video?: VideoPicture | null): void {
@@ -302,6 +325,10 @@ export class ExportFrameRenderer {
 
   private drawFooter(): void {
     const { ctx } = this;
+    if (this.handRoomTop < this.footerTop) {
+      ctx.fillStyle = COLORS.bgTop;
+      ctx.fillRect(0, this.handRoomTop, EXPORT_W, this.footerTop - this.handRoomTop);
+    }
     const top = this.footerTop;
     const h = EXPORT_H - top;
     ctx.fillStyle = '#0f0c09';

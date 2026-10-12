@@ -50,6 +50,7 @@ interface AppState {
   loopA: number | null;
   loopB: number | null;
   impacts: boolean;
+  showHands: boolean;
   fallSpeed: number; // pixels per second
   showSettings: boolean;
   practiceMode: PracticeMode;
@@ -92,6 +93,7 @@ interface AppState {
   setLoopB: (t: number | null) => void;
   clearLoop: () => void;
   setImpacts: (v: boolean) => void;
+  setShowHands: (v: boolean) => void;
   setFallSpeed: (v: number) => void;
   setShowSettings: (v: boolean) => void;
   setPracticeMode: (v: PracticeMode) => void;
@@ -134,6 +136,7 @@ export const useStore = create<AppState>((set) => ({
   loopA: null,
   loopB: null,
   impacts: true,
+  showHands: true,
   fallSpeed: 220,
   showSettings: false,
   practiceMode: 'off',
@@ -182,6 +185,7 @@ export const useStore = create<AppState>((set) => ({
   setLoopB: (loopB) => set({ loopB }),
   clearLoop: () => set({ loopA: null, loopB: null }),
   setImpacts: (impacts) => set({ impacts }),
+  setShowHands: (showHands) => set({ showHands }),
   setFallSpeed: (fallSpeed) => set({ fallSpeed }),
   setShowSettings: (showSettings) => set({ showSettings }),
   setPracticeMode: (practiceMode) => set({ practiceMode, waiting: false, expected: [] }),

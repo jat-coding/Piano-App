@@ -39,6 +39,8 @@ export function Settings({ onToggleMidi }: Props) {
   const setGlow = useStore((s) => s.setGlow);
   const impacts = useStore((s) => s.impacts);
   const setImpacts = useStore((s) => s.setImpacts);
+  const showHands = useStore((s) => s.showHands);
+  const setShowHands = useStore((s) => s.setShowHands);
   const fallSpeed = useStore((s) => s.fallSpeed);
   const setFallSpeed = useStore((s) => s.setFallSpeed);
   const practiceMode = useStore((s) => s.practiceMode);
@@ -104,6 +106,7 @@ export function Settings({ onToggleMidi }: Props) {
 
         <Toggle label="Strike glow" value={glow} onChange={setGlow} />
         <Toggle label="Impact effects" value={impacts} onChange={setImpacts} />
+        <Toggle label="Show hands" value={showHands} onChange={setShowHands} />
 
         <label className="field">
           <span>

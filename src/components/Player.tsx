@@ -81,6 +81,7 @@ export function Player() {
       renderer.opts.showRight = st.showRight;
       renderer.opts.glow = st.glow;
       renderer.opts.impacts = st.impacts && !reduceMotion;
+      renderer.opts.showHands = st.showHands;
       renderer.opts.pixelsPerSecond = st.fallSpeed;
 
       const t = engine.tick();

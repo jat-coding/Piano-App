@@ -37,6 +37,7 @@ function download(result: ExportResult): void {
  * screen as text — never a silent close.
  */
 export function ExportDialog({ onClose }: { onClose: () => void }) {
+  const showHands = useStore((s) => s.showHands);
   const song = useStore((s) => s.song);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const abortRef = useRef<AbortController | null>(null);
@@ -148,6 +149,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
                   ? 'Sound: your original recording (the part you picked).'
                   : "Sound: Cascade's piano playing the notes."}
               </li>
+              <li>
+                {showHands
+                  ? 'Hands playing the keys (turn off in Settings → Show hands).'
+                  : 'No hands (turned off in Settings).'}
+              </li>
             </ul>
             {phase.plan.notes.map((n) => (
               <p key={n} className="export-note">
@@ -159,7 +165,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
               <button className="ghost-btn" onClick={onClose}>
                 Cancel
               </button>
-              <button className="primary-btn" onClick={() => start(phase.plan)}>
+              <button className="primary-btn" onClick={() => start({ ...phase.plan, hands: showHands })}>
                 Make video
               </button>
             </div>

@@ -1,5 +1,8 @@
 import type { NoteEvent, Song, Hand } from '../types';
 import { computeKeyboard, indexKeys, isBlackKey, type KeyGeometry } from './keyboard';
+import { HandAnimator } from '../hands/handPose';
+import { drawHands } from '../hands/drawHands';
+import { keyU } from '../hands/fingering';
 
 /** Cascade palette — keep in sync with :root in index.css (the video export reuses it). */
 export const COLORS = {
@@ -34,6 +37,7 @@ export interface RenderOptions {
   showRight: boolean;
   glow: boolean;
   impacts: boolean;
+  showHands: boolean;
 }
 
 interface Particle {
@@ -61,6 +65,11 @@ export class Renderer {
   private keyByMidi = new Map<number, KeyGeometry>();
   private keyboardHeight = 0;
   private strikeY = 0;
+  private whiteW = 0;
+  private handRoom = 0;
+  private laidOutHands = false;
+  // Fingering + hand poses for the current song, built the first time hands are drawn.
+  private hands: HandAnimator | null = null;
 
   opts: RenderOptions = {
     pixelsPerSecond: 220,
@@ -68,6 +77,7 @@ export class Renderer {
     showRight: true,
     glow: true,
     impacts: true,
+    showHands: true,
   };
 
   // Impact particles (own wall clock so they don't warp with seek/speed).
@@ -87,6 +97,7 @@ export class Renderer {
 
   setSong(song: Song | null): void {
     this.song = song;
+    this.hands = null;
     this.particles = [];
     this.prevActive.clear();
   }
@@ -126,19 +137,28 @@ export class Renderer {
     this.canvas.style.width = `${cssW}px`;
     this.canvas.style.height = `${cssH}px`;
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.layout();
+  }
 
-    // Keyboard occupies ~16% of height, clamped to a sane pixel range.
-    this.keyboardHeight = Math.max(70, Math.min(150, cssH * 0.16));
-    this.strikeY = cssH - this.keyboardHeight;
-
+  private layout(): void {
+    const { cssW, cssH } = this;
     const kb = computeKeyboard(cssW);
     this.keys = kb.keys;
     this.keyByMidi = indexKeys(kb.keys);
+    this.whiteW = kb.whiteWidth;
+
+    // Keyboard occupies ~16% of height, clamped to a sane pixel range.
+    this.keyboardHeight = Math.max(70, Math.min(150, cssH * 0.16));
+    // With hands on, leave a strip under the keys for the palms.
+    this.laidOutHands = this.opts.showHands;
+    this.handRoom = this.opts.showHands ? Math.round(Math.max(14, Math.min(110, this.whiteW * 3))) : 0;
+    this.strikeY = cssH - this.keyboardHeight - this.handRoom;
   }
 
   /** Draw one frame at the given transport time (seconds). */
   draw(currentTime: number): void {
     const { ctx, cssW, cssH } = this;
+    if (this.opts.showHands !== this.laidOutHands) this.layout();
     const now = performance.now() / 1000;
     const dt = this.lastWall ? Math.min(now - this.lastWall, 0.05) : 0;
     this.lastWall = now;
@@ -179,6 +199,32 @@ export class Renderer {
     this.drawStrikeLine();
     if (this.opts.impacts) this.updateAndDrawParticles(dt);
     this.drawKeyboard(active);
+    if (this.opts.showHands) this.drawHandLayer(currentTime);
+  }
+
+  private drawHandLayer(currentTime: number): void {
+    const { ctx, cssW } = this;
+    const top = this.strikeY + this.keyboardHeight;
+    ctx.fillStyle = COLORS.bgTop;
+    ctx.fillRect(0, top, cssW, this.cssH - top);
+    if (!this.song || !this.song.notes.length) return;
+    if (!this.hands) this.hands = new HandAnimator(this.song.notes);
+    const u0 = keyU(this.keys[0].midi) - 0.5;
+    const ww = this.whiteW;
+    drawHands(
+      ctx,
+      this.hands,
+      currentTime,
+      {
+        uToX: (u) => (u - u0) * ww,
+        whiteW: ww,
+        strikeY: this.strikeY,
+        kbH: this.keyboardHeight,
+        blackH: this.keyboardHeight * 0.62,
+        pixelRatio: this.dpr,
+      },
+      { left: this.opts.showLeft, right: this.opts.showRight },
+    );
   }
 
   private spawnImpact(midi: number, hand: Hand): void {
@@ -396,7 +442,7 @@ export class Renderer {
 
   private roundRect(x: number, y: number, w: number, h: number, r: number): void {
     const ctx = this.ctx;
-    const rad = Math.min(r, w / 2, h / 2);
+    const rad = Math.max(0, Math.min(r, w / 2, h / 2));
     ctx.beginPath();
     ctx.moveTo(x + rad, y);
     ctx.arcTo(x + w, y, x + w, y + h, rad);

@@ -23,6 +23,8 @@ export interface ExportPlan {
   duration: number; // seconds
   /** Plain-language caveats to show before starting. */
   notes: string[];
+  /** Draw the animated hands (Settings → Show hands). Defaults to on. */
+  hands?: boolean;
 }
 
 export interface ExportProgress {
@@ -214,7 +216,7 @@ export async function exportVideo(
   }
   check(signal);
 
-  const renderer = new ExportFrameRenderer(song, layout);
+  const renderer = new ExportFrameRenderer(song, layout, plan.hands ?? true);
   const totalFrames = Math.max(1, Math.round(plan.duration * FPS));
   const vCodec = force === 'webm' ? null : await pickVideoCodec();
 
