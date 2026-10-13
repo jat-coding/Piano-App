@@ -5,6 +5,7 @@ import type { VideoPicture } from './videoSource';
 import { HandAnimator } from '../hands/handPose';
 import { drawHands, type HandGeometry } from '../hands/drawHands';
 import { keyU } from '../hands/fingering';
+import type { SessionTrack } from '../interactive/recording';
 
 /** 'full' = falling notes fill the frame; 'video' = source video on top, notes below. */
 export type ExportLayout = 'full' | 'video';
@@ -18,6 +19,12 @@ const INK = '#14110d';
 const IVORY = '#f1e7d0';
 /** Hands never shrink below this many px per white key, however wide the zoom. */
 const MIN_HAND_UNIT = 34;
+// Play-along sessions
+const WRONG = '#c4473f'; // a wrong key's red
+const WRONG_RGB = '196,71,63';
+const WAIT_RGB = '167,184,106'; // the green of a key the song is waiting on (as in the app)
+const WRONG_FLASH = 0.3; // s a wrong key stays red
+const BURST_S = 0.5; // s a hit's little burst lasts
 
 /** A key that is lit: by which hand, and whether a finger is on it or the pedal holds it. */
 interface Lit {
@@ -65,6 +72,8 @@ export class ExportFrameRenderer {
     private song: Song,
     private layout: ExportLayout,
     showHands = true,
+    /** A play-along session: frames follow its timeline (waits, hits, wrong keys, score). */
+    private session: SessionTrack | null = null,
   ) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = EXPORT_W;
@@ -138,12 +147,18 @@ export class ExportFrameRenderer {
     ctx.fillStyle = this.pool;
     ctx.fillRect(0, this.notesTop, EXPORT_W, this.strikeY - this.notesTop);
 
+    // In a play-along session, t is video time; the song stands still while it waits.
+    const s = this.session;
+    const songT = s ? s.songAt(t) : t;
     this.drawOctaveGuides();
-    const active = this.drawNotes(t);
+    const due = new Set<number>();
+    const active = this.drawNotes(songT, t, due);
     this.drawStrike(active);
-    this.drawKeyboard(active);
+    if (s) this.drawBursts(t);
+    this.drawKeyboard(active, t, due);
     this.drawFooter();
-    if (this.hands && this.handGeom) drawHands(ctx, this.hands, t, this.handGeom);
+    if (this.hands && this.handGeom) drawHands(ctx, this.hands, songT, this.handGeom);
+    if (s && t >= s.cardFrom) this.drawScoreCard(t - s.cardFrom);
   }
 
   private drawVideo(video?: VideoPicture | null): void {
@@ -188,8 +203,9 @@ export class ExportFrameRenderer {
     ctx.stroke();
   }
 
-  private drawNotes(t: number): Map<number, Lit> {
+  private drawNotes(t: number, v: number, due: Set<number>): Map<number, Lit> {
     const { ctx, pps } = this;
+    const s = this.session;
     const notes = this.notes;
     const active = new Map<number, Lit>();
     const ahead = (this.strikeY - this.notesTop) / pps;
@@ -214,7 +230,11 @@ export class ExportFrameRenderer {
       }
       // From `sus` on, no finger is on the key: the pedal holds the note.
       const sus = this.hands ? this.hands.sustainFrom(i) : Infinity;
-      if (t >= n.startTime && t < end) {
+      // Play along: a key lights only once the player has hit it; until then the song
+      // waits on it and the key is outlined green.
+      const hit = !s || s.hitAt[i] <= v;
+      if (s && !hit && s.required[i] && Math.abs(n.startTime - t) < 0.03) due.add(n.midi);
+      if (hit && t >= n.startTime && t < end) {
         const sustained = t >= sus;
         const prev = active.get(n.midi);
         if (!prev || prev.sustained) active.set(n.midi, { hand: n.hand, sustained });
@@ -312,20 +332,27 @@ export class ExportFrameRenderer {
     ctx.fillRect(0, strikeY - 2, EXPORT_W, 3);
   }
 
-  private drawKeyboard(active: Map<number, Lit>): void {
+  private drawKeyboard(active: Map<number, Lit>, v = 0, due: Set<number> = new Set()): void {
     const { ctx, strikeY, kbH } = this;
     const labelSize = Math.max(14, Math.min(26, this.whiteW * 0.42));
+    const wrong = this.wrongAt(v);
 
     for (const key of this.keys) {
       if (key.black) continue;
       const lit = active.get(key.midi);
       const hand = lit && !lit.sustained ? lit.hand : undefined;
+      const red = wrong.get(key.midi);
       ctx.fillStyle = hand ? noteColor(hand, false) : this.whiteKeyGrad;
       ctx.fillRect(key.x, strikeY, key.w, kbH);
       if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, kbH, 0.38);
+      if (red) {
+        ctx.fillStyle = `rgba(${WRONG_RGB},${0.35 + 0.6 * red})`;
+        ctx.fillRect(key.x, strikeY, key.w, kbH);
+      }
       ctx.strokeStyle = COLORS.keyBorder;
       ctx.lineWidth = 2;
       ctx.strokeRect(Math.round(key.x) + 1, strikeY, key.w, kbH);
+      if (due.has(key.midi)) this.drawDue(key.x, strikeY, key.w, kbH, v);
 
       // Letter on each white key; C also gets its octave number so you can find your place.
       const isC = key.midi % 12 === 0;
@@ -345,9 +372,17 @@ export class ExportFrameRenderer {
       if (!key.black) continue;
       const lit = active.get(key.midi);
       const hand = lit && !lit.sustained ? lit.hand : undefined;
-      ctx.fillStyle = hand ? noteColor(hand, true) : COLORS.blackKey;
+      const red = wrong.get(key.midi);
+      ctx.fillStyle = red ? WRONG : hand ? noteColor(hand, true) : COLORS.blackKey;
       roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
       ctx.fill();
+      if (red) {
+        ctx.strokeStyle = COLORS.keyBorder;
+        ctx.lineWidth = 2;
+        roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
+        ctx.stroke();
+        continue;
+      }
       if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, blackH, 0.5);
       else if (!hand) {
         ctx.fillStyle = 'rgba(216,190,120,0.14)';
@@ -358,7 +393,125 @@ export class ExportFrameRenderer {
       ctx.lineWidth = 2;
       roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
       ctx.stroke();
+      if (due.has(key.midi)) this.drawDue(key.x, strikeY, key.w, blackH, v);
     }
+  }
+
+  /** Keys flashing red at video time v (wrong keys), with how strongly (1 → 0). */
+  private wrongAt(v: number): Map<number, number> {
+    const out = new Map<number, number>();
+    const w = this.session?.wrong;
+    if (!w) return out;
+    for (const e of w) {
+      if (e.v > v) break;
+      const age = v - e.v;
+      if (age < WRONG_FLASH) out.set(e.midi, Math.max(out.get(e.midi) ?? 0, 1 - age / WRONG_FLASH));
+    }
+    return out;
+  }
+
+  /** A key the song is waiting on: a pulsing green outline (as in the app). */
+  private drawDue(x: number, y: number, w: number, h: number, v: number): void {
+    const { ctx } = this;
+    const pulse = 0.5 + 0.5 * Math.sin(v * 5.5);
+    ctx.save();
+    ctx.strokeStyle = `rgba(${WAIT_RGB},${0.65 + 0.35 * pulse})`;
+    ctx.lineWidth = 5;
+    ctx.shadowColor = `rgba(${WAIT_RGB},0.9)`;
+    ctx.shadowBlur = 10 + 10 * pulse;
+    roundRect(ctx, x + 3, y + 3, w - 6, h - 6, 6);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * A little burst of sparks off each key as it's hit, like the app's impact effect.
+   * Drawn from the hit's time alone (seeded per hit), so every export is identical.
+   */
+  private drawBursts(v: number): void {
+    const hits = this.session!.hits;
+    const { ctx } = this;
+    let i = hits.length;
+    while (i > 0 && hits[i - 1].v > v) i--;
+    for (let k = i - 1; k >= 0 && v - hits[k].v < BURST_S; k--) {
+      const h = hits[k];
+      const key = this.keyByMidi.get(h.midi);
+      if (!key) continue;
+      const age = v - h.v;
+      const color = noteColor(h.hand, false);
+      let seed = (h.midi * 7919 + Math.round(h.v * 1000)) >>> 0;
+      const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+      for (let p = 0; p < 9; p++) {
+        const angle = -Math.PI / 2 + (rand() - 0.5) * 1.7;
+        const speed = 160 + rand() * 260;
+        const life = 0.35 + rand() * 0.15;
+        if (age > life) continue;
+        const x = key.cx + Math.cos(angle) * speed * age;
+        const y = this.strikeY + Math.sin(angle) * speed * age + 0.5 * 700 * age * age;
+        const a = 1 - age / life;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5 + a * 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** The score, over the last frame of the session (fades in over 0.4s). */
+  private drawScoreCard(age: number): void {
+    const { ctx } = this;
+    const s = this.session!.score;
+    const a = Math.min(1, age / 0.4);
+    ctx.save();
+    ctx.globalAlpha = a * 0.78;
+    ctx.fillStyle = '#0b0907';
+    ctx.fillRect(0, 0, EXPORT_W, EXPORT_H);
+    ctx.globalAlpha = a;
+    const cw = 820;
+    const ch = 700;
+    const x = (EXPORT_W - cw) / 2;
+    const y = (EXPORT_H - ch) / 2 - 60;
+    const g = ctx.createLinearGradient(0, y, 0, y + ch);
+    g.addColorStop(0, '#3a2018');
+    g.addColorStop(1, '#1d100c');
+    ctx.fillStyle = g;
+    roundRect(ctx, x, y, cw, ch, 36);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(216,190,120,0.55)';
+    ctx.lineWidth = 3;
+    roundRect(ctx, x + 1.5, y + 1.5, cw - 3, ch - 3, 36);
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#c2a24a';
+    ctx.font = `500 44px ${DISPLAY}`;
+    ctx.fillText(this.song.name, EXPORT_W / 2, y + 100, cw - 80);
+    ctx.fillStyle = 'rgba(241,231,208,0.7)';
+    ctx.font = `500 34px ${DISPLAY}`;
+    ctx.fillText(s.complete ? 'played through' : 'played along', EXPORT_W / 2, y + 152, cw - 80);
+
+    ctx.fillStyle = IVORY;
+    ctx.font = `600 190px ${DISPLAY}`;
+    ctx.fillText(`${Math.round(s.accuracy * 100)}%`, EXPORT_W / 2, y + 370);
+    ctx.fillStyle = '#d8be78';
+    ctx.font = `500 40px ${DISPLAY}`;
+    ctx.fillText('accuracy', EXPORT_W / 2, y + 425);
+
+    ctx.fillStyle = 'rgba(216,190,120,0.35)';
+    ctx.fillRect(x + 120, y + 470, cw - 240, 2);
+
+    ctx.fillStyle = IVORY;
+    ctx.font = `600 72px ${DISPLAY}`;
+    ctx.fillText(String(s.bestStreak), EXPORT_W / 2 - 190, y + 575);
+    ctx.fillText(`${s.clean}/${s.total}`, EXPORT_W / 2 + 190, y + 575, 340);
+    ctx.fillStyle = '#d8be78';
+    ctx.font = `500 32px ${DISPLAY}`;
+    ctx.fillText('best streak', EXPORT_W / 2 - 190, y + 625);
+    ctx.fillText('clean notes', EXPORT_W / 2 + 190, y + 625);
+    ctx.restore();
   }
 
   /** A key the pedal is holding (no finger on it): a dim wash and an outline in the hand colour. */

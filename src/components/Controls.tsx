@@ -8,6 +8,7 @@ import {
   PianoIcon,
   SettingsIcon,
   ExportVideoIcon,
+  MicIcon,
 } from './icons';
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
   onSetLoopA: () => void;
   onSetLoopB: () => void;
   onExport: () => void;
+  onPlayAlong: () => void;
 }
 
 const SPEED_PRESETS = [0.5, 0.75, 1, 1.5];
@@ -28,6 +30,7 @@ export function Controls({
   onSetLoopA,
   onSetLoopB,
   onExport,
+  onPlayAlong,
 }: Props) {
   const isPlaying = useStore((s) => s.isPlaying);
   const rate = useStore((s) => s.rate);
@@ -132,6 +135,14 @@ export function Controls({
         >
           <PianoIcon size={18} />
           {modeLabel[practiceMode] && <span className="mode-label">{modeLabel[practiceMode]}</span>}
+        </button>
+        <button
+          className="ctrl-btn small"
+          onClick={onPlayAlong}
+          title="Play along: the song waits for your piano"
+          aria-label="Play along"
+        >
+          <MicIcon size={18} />
         </button>
         <button
           className="ctrl-btn small"

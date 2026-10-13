@@ -16,6 +16,9 @@ export const SAMPLE_URLS: Record<string, string> = {
 };
 
 const CHORD_EPS = 0.04; // notes within 40ms count as one chord/gate
+// Play along: when every key of the next chord was played this far (song-s) before
+// the song got there, jump to it instead of making the player wait for the picture.
+const EARLY_SNAP = 0.12;
 
 // "Scratching" while the notes are dragged: each note sounds briefly as it crosses
 // the strike line, rate-limited so a fast drag never turns into mush.
@@ -27,6 +30,14 @@ const SCRATCH_PER_STEP = 3; // at most this many new notes per drag step / frame
 const SCRATCH_VOICES = 6; // at most this many scratch notes sounding together
 const SCRATCH_REPEAT = 0.06; // s before the same key may sound again
 const NORMAL_RELEASE = 1;
+
+/** A chord the player has to play: when, which keys, and its note index range [from, to). */
+export interface Gate {
+  time: number;
+  midis: number[];
+  from: number;
+  to: number;
+}
 
 export interface ScratchStats {
   crossed: number; // notes that crossed the strike line
@@ -64,6 +75,21 @@ export class PlaybackEngine {
   private satisfied = new Set<number>();
 
   loaded = false;
+
+  // ---- play along (interactive mode) ----
+  /** Never sound the song's notes (the player plays everything). */
+  silent = false;
+  /** Song-seconds ahead of the next chord in which a right key already counts. */
+  earlyWindow = 0;
+  private early = new Set<number>();
+  /**
+   * Called when a chord is released, with the note index range [from, to). `skipped` =
+   * the player went on past it and it was never heard (see skipGates).
+   */
+  onRelease: ((from: number, to: number, skipped: boolean) => void) | null = null;
+  private skipping = false;
+  /** Notes the player doesn't have to play (treated like a muted hand). */
+  ignored: Set<NoteEvent> | null = null;
 
   // ---- scrubbing (drag the notes) ----
   private scrubbing = false;
@@ -239,9 +265,81 @@ export class PlaybackEngine {
     }
   }
 
-  /** Called from MIDI input: register a key the player pressed. */
-  notePlayed(midi: number): void {
-    if (this._waiting && this.expected.has(midi)) this.satisfied.add(midi);
+  /**
+   * Called from MIDI/mic input: register a key the player pressed. Returns true if
+   * it answered the chord the song is waiting on (or, with earlyWindow, the next one).
+   */
+  notePlayed(midi: number): boolean {
+    if (this._waiting) {
+      if (!this.expected.has(midi)) return false;
+      this.satisfied.add(midi);
+      return true;
+    }
+    if (!this.practice || this.earlyWindow <= 0) return false;
+    const next = this.nextGate();
+    if (!next || next.time - this._songTime > this.earlyWindow || !next.midis.includes(midi)) return false;
+    this.early.add(midi);
+    return true;
+  }
+
+  /** Index of the next note the song will reach (everything before it was played/passed). */
+  get cursorIndex(): number {
+    return this.cursor;
+  }
+
+  /** The next chord the player must play, and when it's due (song-s). Muted hands are left out. */
+  nextGate(): Gate | null {
+    return this.gatesAhead(1)[0] ?? null;
+  }
+
+  /** Up to n upcoming chords from the cursor. Chords of only muted notes are passed over. */
+  gatesAhead(n: number): Gate[] {
+    const notes = this.song?.notes;
+    const out: Gate[] = [];
+    if (!notes) return out;
+    for (let c = this.cursor; c < notes.length && out.length < n; ) {
+      const time = notes[c].startTime;
+      const midis: number[] = [];
+      let i = c;
+      for (; i < notes.length && notes[i].startTime - time <= CHORD_EPS; i++) {
+        if (!this.isMuted(notes[i]) && !midis.includes(notes[i].midi)) midis.push(notes[i].midi);
+      }
+      if (midis.length) out.push({ time, midis, from: c, to: i });
+      c = i; // all muted — the song plays through it
+    }
+    return out;
+  }
+
+  /**
+   * The player has gone on past chords the app never heard (a missed detection, or a
+   * stray note in a transcription): pass `missed` chords without credit, then release
+   * `heard` chords as played, and carry on from there.
+   */
+  skipGates(missed: number, heard: number): void {
+    const notes = this.song?.notes;
+    if (!notes || !this.practice) return;
+    const gates = this.gatesAhead(missed + heard);
+    if (gates.length < missed + heard) return;
+    this._waiting = false;
+    this.expected.clear();
+    this.satisfied.clear();
+    this.early.clear();
+    gates.forEach((g, k) => {
+      this.skipping = k < missed;
+      this.cursor = g.from;
+      this._songTime = Math.max(this._songTime, g.time);
+      this.releaseGate(notes);
+    });
+    this.skipping = false;
+  }
+
+  /** Keys still needed for the chord being waited on, or the upcoming one inside earlyWindow. */
+  pendingMidis(): number[] {
+    if (this._waiting) return this.expectedMidis();
+    if (!this.practice || this.earlyWindow <= 0) return [];
+    const next = this.nextGate();
+    if (!next || next.time - this._songTime > this.earlyWindow) return [];
+    return next.midis.filter((m) => !this.early.has(m));
   }
 
   /** Sound a note the player pressed, so they hear their own keyboard. */
@@ -258,6 +356,7 @@ export class PlaybackEngine {
     this._waiting = false;
     this.expected.clear();
     this.satisfied.clear();
+    this.early.clear();
   }
 
   /**
@@ -306,6 +405,14 @@ export class PlaybackEngine {
       return;
     }
 
+    // Every key of the next chord already played, well ahead: catch the picture up.
+    if (this.early.size) {
+      const g = this.nextGate();
+      if (g && g.time - this._songTime > EARLY_SNAP && g.midis.every((m) => this.early.has(m))) {
+        this._songTime = g.time;
+      }
+    }
+
     this._songTime += dt * this._rate;
 
     if (this.cursor >= notes.length) return;
@@ -322,7 +429,10 @@ export class PlaybackEngine {
       if (this.isMuted(notes[i])) continue; // don't require a muted (solo'd-out) hand
       this.expected.add(notes[i].midi);
     }
-    if (this.expected.size === 0) {
+    // Keys played a moment early already count.
+    for (const m of this.early) if (this.expected.has(m)) this.satisfied.add(m);
+    this.early.clear();
+    if (this.expected.size === 0 || this.expectedMidis().length === 0) {
       // Nothing to wait for (all muted) — play through.
       this.releaseGate(notes);
     } else {
@@ -332,6 +442,7 @@ export class PlaybackEngine {
 
   private releaseGate(notes: NoteEvent[]): void {
     const gateTime = this.cursor < notes.length ? notes[this.cursor].startTime : this._songTime;
+    const from = this.cursor;
     while (
       this.cursor < notes.length &&
       notes[this.cursor].startTime - gateTime <= CHORD_EPS
@@ -339,16 +450,20 @@ export class PlaybackEngine {
       this.trigger(notes[this.cursor]);
       this.cursor++;
     }
-    this.clearGate();
+    this._waiting = false;
+    this.expected.clear();
+    this.satisfied.clear();
+    this.onRelease?.(from, this.cursor, this.skipping);
   }
 
-  private isMuted(n: NoteEvent): boolean {
+  isMuted(n: NoteEvent): boolean {
+    if (this.ignored?.has(n)) return true;
     if (n.hand === 'left') return this.muteLeft;
     return this.muteRight; // right + unknown
   }
 
   private trigger(n: NoteEvent): void {
-    if (!this.sampler || !this.loaded) return;
+    if (this.silent || !this.sampler || !this.loaded) return;
     if (this.isMuted(n)) return;
     const name = Tone.Frequency(n.midi, 'midi').toNote();
     // Sustain in real seconds so the sound matches the on-screen note length.

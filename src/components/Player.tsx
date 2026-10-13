@@ -10,6 +10,9 @@ import { MidiInput } from '../lib/midiInput';
 import { RotateIcon } from './icons';
 import { ExportDialog } from './ExportDialog';
 import { NoteScrub } from '../lib/noteScrub';
+import { PlayAlong } from './PlayAlong';
+import type { PlayAlongSession } from '../interactive/session';
+import type { SessionExport } from '../interactive/recording';
 
 function isMobile(): boolean {
   return (
@@ -29,6 +32,12 @@ export function Player() {
   const rafRef = useRef(0);
   const hideTimerRef = useRef<number>(0);
   const scrubRef = useRef<NoteScrub | null>(null);
+  // Play along: the live session (driven from the frame loop) and the panel's state.
+  const sessionRef = useRef<PlayAlongSession | null>(null);
+  const [playAlong, setPlayAlong] = useState(false);
+  const playAlongRef = useRef(false);
+  playAlongRef.current = playAlong;
+  const [sessionExport, setSessionExport] = useState<SessionExport | null>(null);
 
   const [uiVisible, setUiVisible] = useState(true);
   const [portrait, setPortrait] = useState(false);
@@ -95,7 +104,8 @@ export function Player() {
       engine.muteRight = !st.showRight;
       engine.loopA = st.loopA;
       engine.loopB = st.loopB;
-      const wantWait = st.practiceMode === 'wait';
+      const session = sessionRef.current;
+      const wantWait = st.practiceMode === 'wait' || !!session?.running;
       if (engine.practice !== wantWait) engine.setPractice(wantWait);
 
       renderer.opts.showLeft = st.showLeft;
@@ -106,7 +116,11 @@ export function Player() {
       renderer.opts.pixelsPerSecond = st.fallSpeed;
 
       scrubRef.current?.step(performance.now() / 1000, st.duration);
+      // Play along: listen, and move the song on from what was heard, before the tick.
+      session?.tick();
       const t = engine.tick();
+      session?.afterTick(t);
+      renderer.litFilter = session?.running ? (i) => Number.isFinite(session.hitAt[i]) : null;
 
       // Surface wait-mode state to the UI + renderer only when it changes.
       const expected = engine.expectedMidis();
@@ -256,6 +270,17 @@ export function Player() {
     (window as any).__cascadePlayer = { engine: engineRef.current, scrub: scrubRef.current };
   }
 
+  const openPlayAlong = useCallback(() => {
+    scrubRef.current?.reset();
+    engineRef.current.pause();
+    setPlaying(false);
+    setPlayAlong(true);
+  }, [setPlaying]);
+
+  const bindSession = useCallback((s: PlayAlongSession | null) => {
+    sessionRef.current = s;
+  }, []);
+
   const openExport = useCallback(() => {
     scrubRef.current?.reset();
     engineRef.current.pause();
@@ -271,6 +296,13 @@ export function Player() {
         try {
           const devices = await midi.enable({
             onNoteOn: (m, v) => {
+              const session = sessionRef.current;
+              if (session?.running) {
+                // Play along: the keyboard is heard, the app stays silent.
+                session.keyPressed(m, v);
+                rendererRef.current?.flashKey(m);
+                return;
+              }
               engineRef.current.notePlayed(m);
               engineRef.current.audition(m, v);
             },
@@ -294,7 +326,7 @@ export function Player() {
   // ---- keyboard shortcuts ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!song || exportingRef.current) return;
+      if (!song || exportingRef.current || playAlongRef.current) return;
       switch (e.code) {
         case 'Space':
           e.preventDefault();
@@ -324,11 +356,11 @@ export function Player() {
   return (
     <div
       ref={containerRef}
-      className={`player${uiVisible ? '' : ' ui-hidden'}`}
+      className={`player${uiVisible ? '' : ' ui-hidden'}${playAlong ? ' playing-along' : ''}`}
       onPointerMove={poke}
       onMouseLeave={() => engineRef.current.playing && setUiVisible(false)}
       onWheel={(e) => {
-        if (e.target !== canvasRef.current || !song) return;
+        if (e.target !== canvasRef.current || !song || playAlongRef.current) return;
         engineRef.current.unlock();
         scrubRef.current?.wheel(e.deltaY, e.deltaMode, e.timeStamp / 1000);
         poke();
@@ -349,6 +381,13 @@ export function Player() {
           const midi = scrub.active
             ? null
             : renderer.keyAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+          if (midi != null && sessionRef.current?.running) {
+            // Play along: an on-screen key counts like a MIDI key (and stays silent).
+            sessionRef.current.keyPressed(midi);
+            renderer.flashKey(midi);
+            return;
+          }
+          if (playAlongRef.current) return; // no scrubbing during play along
           if (midi != null) {
             // Tapped a key — play it, and let it answer wait-mode.
             engineRef.current.unlock();
@@ -372,7 +411,7 @@ export function Player() {
 
       <div ref={probeRef} className="safe-probe" aria-hidden="true" />
       {loadingAudio && <div className="audio-loading">Loading piano…</div>}
-      {waiting && <div className="wait-hint">Waiting — play the green keys (tap or MIDI)</div>}
+      {waiting && !playAlong && <div className="wait-hint">Waiting — play the green keys (tap or MIDI)</div>}
 
       <CleanupPanel />
       <Settings onToggleMidi={toggleMidi} />
@@ -386,12 +425,25 @@ export function Player() {
           onSetLoopA={setLoopAtA}
           onSetLoopB={setLoopAtB}
           onExport={openExport}
+          onPlayAlong={openPlayAlong}
         />
       </div>
 
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
 
-      {portrait && !exporting && (
+      {playAlong && (
+        <PlayAlong
+          engine={engineRef.current}
+          renderer={() => rendererRef.current}
+          bind={bindSession}
+          onToggleMidi={toggleMidi}
+          onExport={setSessionExport}
+          onClose={() => setPlayAlong(false)}
+        />
+      )}
+      {sessionExport && <ExportDialog session={sessionExport} onClose={() => setSessionExport(null)} />}
+
+      {portrait && !exporting && !sessionExport && (
         <div className="rotate-overlay">
           <div className="rotate-icon">
             <RotateIcon size={56} />
