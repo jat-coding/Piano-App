@@ -133,9 +133,15 @@ function sampleClosed(pts: Pt[], per = 4): Pt[] {
   return out;
 }
 
-/** One side of a finger and its round tip, as points for a smooth closed outline. */
+/** One finger's outline pieces, and its sides at each joint (for shading). */
 interface FingerOutline {
-  pts: Pt[];
+  /**
+   * One convex capsule per bone (the hull of the circles at its two joints), canvas px.
+   * Each is a simple convex polygon whatever the pose, so a finger seen end-on, curled
+   * or stretched never folds its outline over itself; their union is the finger, round
+   * at every joint and at the tip.
+   */
+  caps: Pt[][];
   /** Left/right side points at each joint (for shading bands), canvas px. */
   left: Pt[];
   right: Pt[];
@@ -150,11 +156,40 @@ function fingerRadius(sk: Skeleton, f: number, i: number): number {
   return f === 1 ? r * (i === 0 ? 1.5 : i === 1 ? 1.0 : 0.8) : r;
 }
 
+/** Points around a circle, counter-clockwise on screen. */
+function circlePts(c: Pt, r: number, n = CIRCLE_N): Pt[] {
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    out.push({ x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r });
+  }
+  return out;
+}
+const CIRCLE_N = 24;
+
+/** Convex hull (monotone chain): always a simple polygon, whatever the input. */
+function hull(pts: Pt[]): Pt[] {
+  const p = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cross = (o: Pt, a: Pt, b: Pt) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lo: Pt[] = [];
+  for (const q of p) {
+    while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
+  }
+  const up: Pt[] = [];
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
+  }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+
 /**
- * The outline of one finger: tapered sides with a little extra width at each
- * joint (PIP +6%, DIP +3%, the outer MCP head of the index and little finger
- * +8%, all growing as the joint bends), a round tip that narrows when it is
- * seen end-on, and a round base.
+ * The outline of one finger from joint `from`: tapered capsules with a little extra
+ * width at each joint (PIP +6%, DIP +3%, the MCP head of the index and little finger +4%,
+ * all growing as the joint bends), and a round tip that narrows when it is seen end-on.
  */
 function fingerShape(sk: Skeleton, f: number, from = 0): FingerOutline {
   const fs = sk.fingers[f];
@@ -164,14 +199,13 @@ function fingerShape(sk: Skeleton, f: number, from = 0): FingerOutline {
   // Fingertip seen end-on (distal bone steeper than 55°): narrower and rounder.
   const tipSteep = f > 1 ? Math.max(0, Math.min(1, ((fs.phi[2] ?? 0) - 55 * (Math.PI / 180)) / (15 * (Math.PI / 180)))) : 0;
   radii[n] *= 1 - 0.12 * tipSteep;
-  if (n > 0 && Math.hypot(js[n].x - js[n - 1].x, js[n].y - js[n - 1].y) < radii[n - 1]) radii[n] = Math.max(radii[n], 0.92 * radii[n - 1]);
   const bend = (i: number) => (i === 1 ? Math.sin(Math.max(0, fs.mcp) * (Math.PI / 180)) : i === 2 ? Math.sin(Math.max(0, fs.pip) * (Math.PI / 180)) : 0);
-  const widen = [0, 0.06 * (0.5 + bend(2)), 0.03 * (0.5 + bend(2)), 0];
+  const widen = [0, 0.06 * (0.5 + bend(2)), 0.03 * (0.5 + bend(2)), 0].slice(from);
+  // The outer MCP head (index: thumb side, little: the far side) lies on the hand's outline.
+  if (from === 0 && (f === 2 || f === 5)) widen[0] = 0.04 * (0.4 + 0.6 * bend(1));
+  const R = radii.map((r, i) => r * (1 + (widen[i] ?? 0)));
   const left: Pt[] = [];
   const right: Pt[] = [];
-  const pts: Pt[] = [];
-  const sideL: Pt[] = [];
-  const sideR: Pt[] = [];
   let lastDir = { x: 0, y: -1 };
   const dirAt = (i: number) => {
     const a = js[Math.max(0, i - 1)];
@@ -185,74 +219,43 @@ function fingerShape(sk: Skeleton, f: number, from = 0): FingerOutline {
     lastDir = { x: dx, y: dy };
     return lastDir;
   };
-  // The outer MCP head (index: thumb side, little: the far side) lies on the hand's outline.
-  const outerSide = f === 2 ? -1 : f === 5 ? 1 : 0; // -1 = left of the finger (thumb side for the RH)
-  const mcpBulge = 0.08 * (0.4 + 0.6 * bend(1));
   for (let i = 0; i <= n; i++) {
     const d = dirAt(i);
-    const r = radii[i] * (1 + (widen[i] ?? 0));
-    let rl = r;
-    let rr = r;
-    if (i === 0 && outerSide) {
-      // Mirrored hands: "thumb side" is screen-left for the right hand, screen-right for the left.
-      const leftIsOuter = (outerSide < 0) === (sk.dir > 0);
-      if (leftIsOuter) rl *= 1 + mcpBulge;
-      else rr *= 1 + mcpBulge;
-    }
-    left.push({ x: js[i].x + d.y * rl, y: js[i].y - d.x * rl });
-    right.push({ x: js[i].x - d.y * rr, y: js[i].y + d.x * rr });
-    // A fingertip seen end-on: the last joint and the tip nearly coincide, so the round
-    // cap takes over from the joint (no shoulder, no squared-off end).
-    const endOn = i === n - 1 && Math.hypot(js[n].x - js[i].x, js[n].y - js[i].y) < radii[i];
-    if (!endOn) {
-      sideL.push(left[i]);
-      sideR.push(right[i]);
-    }
-    const segLen = i < n ? Math.hypot(js[i + 1].x - js[i].x, js[i + 1].y - js[i].y) : 0;
-    if (i < n && segLen > 1.2 * radii[i]) {
-      // Extra stations 25% and 75% along the bone at the plain radius, so the joint
-      // widening stays a local swelling instead of a straight taper (only where the
-      // bone shows long enough from above to have a middle).
-      const dn = dirAt(i + 1);
-      for (const s of [0.25, 0.75]) {
-        const c = lerpPt(js[i], js[i + 1], s);
-        const rs = radii[i] + (radii[i + 1] - radii[i]) * s;
-        const dx = d.x + (dn.x - d.x) * s;
-        const dy = d.y + (dn.y - d.y) * s;
-        const dl = Math.hypot(dx, dy) || 1;
-        sideL.push({ x: c.x + (dy / dl) * rs, y: c.y - (dx / dl) * rs });
-        sideR.push({ x: c.x - (dy / dl) * rs, y: c.y + (dx / dl) * rs });
-      }
-    }
+    left.push({ x: js[i].x + d.y * R[i], y: js[i].y - d.x * R[i] });
+    right.push({ x: js[i].x - d.y * R[i], y: js[i].y + d.x * R[i] });
   }
-  const dEnd = dirAt(n);
-  const end = Math.atan2(dEnd.y, dEnd.x);
-  const d0 = dirAt(0);
-  const start = Math.atan2(d0.y, d0.x);
-  // Drop side points that crowd each other (a bone seen end-on): they kink the curve.
-  const thin = (arr: Pt[]) => {
-    const out: Pt[] = [];
-    for (const p of arr) if (!out.length || Math.hypot(p.x - out[out.length - 1].x, p.y - out[out.length - 1].y) > 0.35 * radii[n]) out.push(p);
-    return out;
-  };
-  const sl = thin(sideL);
-  const sr = thin(sideR);
-  pts.push(...sl);
-  for (const s of [-0.5, -0.3, -0.12, 0.12, 0.3, 0.5]) {
-    const a = end + s * Math.PI * 0.999;
-    pts.push({ x: js[n].x + Math.cos(a) * radii[n], y: js[n].y + Math.sin(a) * radii[n] });
-  }
-  for (let i = sr.length - 1; i >= 0; i--) pts.push(sr[i]);
-  for (const s of [0.75, 1, 1.25]) {
-    const a = start + s * Math.PI;
-    pts.push({ x: js[0].x + Math.cos(a) * radii[0], y: js[0].y + Math.sin(a) * radii[0] });
-  }
-  return { pts, left, right, radii };
+  const caps: Pt[][] = [];
+  for (let i = 0; i < n; i++) caps.push(hull([...circlePts(js[i], R[i]), ...circlePts(js[i + 1], R[i + 1])]));
+  return { caps, left, right, radii };
 }
 
-/** The thumb from its MCP joint to the tip (what shows through the palm when it tucks under). */
-function thumbPhalanges(sk: Skeleton): FingerOutline {
-  return fingerShape(sk, 1, 1);
+/** The thumb from its MCP joint to the tip, one convex piece (its two phalanges lie on one line). */
+function thumbPhalanges(sk: Skeleton): Pt[] {
+  return hull(fingerShape(sk, 1, 1).caps.flat());
+}
+
+/** Fill-path of a closed polygon. */
+function polyPath(ctx: Ctx, pts: Pt[]): void {
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+}
+
+/** True if no two non-adjacent edges of the closed polygon cross. */
+function isSimple(P: Pt[]): boolean {
+  const n = P.length;
+  const cr = (a: Pt, b: Pt, q: Pt) => (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
+  for (let i = 0; i < n; i++) {
+    const a = P[i];
+    const b = P[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const p = P[j];
+      const q = P[(j + 1) % n];
+      if (cr(a, b, p) * cr(a, b, q) < 0 && cr(p, q, a) * cr(p, q, b) < 0) return false;
+    }
+  }
+  return true;
 }
 
 /** All the pieces of one hand's silhouette, in canvas px. Unioned when painted. */
@@ -273,16 +276,7 @@ function handShapes(sk: Skeleton, outlines: FingerOutline[], wristShift: Pt, wri
     P(-36, -6), P(-33, 3), P(-19, 7), P(-9, 9), P(10, 6), P(25, 0), P(34, -9),
     P(36, -30), P(32, -58), P(26, -84),
   ];
-  const wristAt = (a: number, v: number): Pt => {
-    const p = W(a, v);
-    // Rotate the stub about the wrist centre by wristRot (the palm turns, the forearm less so).
-    const c = W(0, -88);
-    const dx = p.x - c.x;
-    const dy = p.y - c.y;
-    const cs = Math.cos(wristRot);
-    const sn = Math.sin(wristRot);
-    return { x: c.x + dx * cs - dy * sn + wristShift.x, y: c.y + dx * sn + dy * cs + wristShift.y };
-  };
+  const wristAt = (a: number, v: number): Pt => sh(wristPoint(sk, a, v, wristShift, wristRot));
   palmPts.push(wristAt(24, -88 - FOREARM), wristAt(-22, -88 - FOREARM));
   palmPts.push(P(-24, -84), P(-31, -64), P(-37, -34));
   shapes.push({ path: (ctx) => smoothClosed(ctx, palmPts), poly: () => sampleClosed(palmPts) });
@@ -309,39 +303,79 @@ function handShapes(sk: Skeleton, outlines: FingerOutline[], wristShift: Pt, wri
   }
 
   for (let f = 1; f <= 5; f++) {
-    const pts = outlines[f].pts.map(sh);
-    shapes.push({ path: (ctx) => smoothClosed(ctx, pts), poly: () => sampleClosed(pts) });
+    for (const cap of outlines[f].caps) {
+      const pts = cap.map(sh);
+      shapes.push({ path: (ctx) => polyPath(ctx, pts), poly: () => pts });
+    }
   }
 
-  // The thumb web: from the thumb's first joint to the index knuckle, so the thumb
-  // stays one piece with the palm whether it reaches out or tucks under.
+  // The ball of the thumb (thenar): the hull of the thumb's base, its first knuckle and the
+  // palm's thumb side. Convex, so it never pinches or crosses itself: at a wide stretch the
+  // thumb grows out of a full base instead of a stick poking out of the palm's side.
   const th = sk.fingers[1].joints.map(sh);
-  const idx = sh(sk.fingers[2].joints[0]);
-  const webA = lerpPt(th[1], th[2], 0.25);
-  const cmc = th[0];
-  const inner = W(-22, -18);
-  const w2 = W(-20, -40);
-  shapes.push({
-    path: (ctx) => {
-      ctx.moveTo(cmc.x, cmc.y);
-      ctx.lineTo(th[1].x, th[1].y);
-      ctx.lineTo(webA.x, webA.y);
-      ctx.quadraticCurveTo(inner.x, inner.y, idx.x, idx.y);
-      ctx.lineTo(w2.x, w2.y);
-      ctx.closePath();
-    },
-    poly: () => {
-      const out = [cmc, th[1], webA];
-      for (let i = 1; i < 8; i++) {
-        const s = i / 8;
-        const r = 1 - s;
-        out.push({ x: r * r * webA.x + 2 * r * s * inner.x + s * s * idx.x, y: r * r * webA.y + 2 * r * s * inner.y + s * s * idx.y });
-      }
-      out.push(idx, w2);
-      return out;
-    },
-  });
+  const tr = outlines[1].radii;
+  const base = hull([
+    ...circlePts(th[0], tr[0], 16),
+    ...circlePts(th[1], tr[1] * 1.08, 16),
+    P(-24, -84), P(-31, -64), P(-37, -34), P(-20, -30), P(-12, -70),
+  ]);
+  shapes.push({ path: (ctx) => polyPath(ctx, base), poly: () => base });
+
+  // The thumb web: skin from partway up the thumb's first phalanx to the index finger's
+  // side. It leaves each digit along that digit's side (no corner where it meets it) and
+  // dips toward the palm between them: a rounded crotch, shallower and wider as the thumb
+  // opens and the skin goes taut.
+  const ix = sk.fingers[2].joints.map(sh);
+  const unitV = (a: Pt, b: Pt): Pt => {
+    const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
+  };
+  const side = (a: Pt, b: Pt, s: number, r: number, toward: Pt): Pt => {
+    const c = lerpPt(a, b, s);
+    const u = unitV(a, b);
+    let nx = -u.y;
+    let ny = u.x;
+    if ((toward.x - c.x) * nx + (toward.y - c.y) * ny < 0) (nx = -nx), (ny = -ny);
+    return { x: c.x + nx * r, y: c.y + ny * r };
+  };
+  const webA = side(th[1], th[2], 0.4, tr[1] * 0.92, ix[0]);
+  const webB = side(ix[0], ix[1], 0.2, outlines[2].radii[0] * 0.92, th[1]);
+  // Abduction: 0 with the thumb at rest (swing about -30° from forward), 1 when it is opened wide.
+  const taut = Math.max(0, Math.min(1, (-sk.fingers[1].splay - 32) / 22));
+  const tautS = taut * taut * (3 - 2 * taut);
+  const inside = W(-10, -25);
+  const ab = Math.hypot(webB.x - webA.x, webB.y - webA.y);
+  const hnd = ab * (0.42 - 0.2 * tautS);
+  const tA = unitV(th[2], th[1]);
+  const tB = unitV(ix[1], ix[0]);
+  const c1 = { x: webA.x + tA.x * hnd, y: webA.y + tA.y * hnd };
+  const c2 = { x: webB.x + tB.x * hnd, y: webB.y + tB.y * hnd };
+  const webPts: Pt[] = [];
+  for (let i = 0; i <= 14; i++) {
+    const s = i / 14;
+    const r = 1 - s;
+    webPts.push({
+      x: r * r * r * webA.x + 3 * r * r * s * c1.x + 3 * r * s * s * c2.x + s * s * s * webB.x,
+      y: r * r * r * webA.y + 3 * r * r * s * c1.y + 3 * r * s * s * c2.y + s * s * s * webB.y,
+    });
+  }
+  webPts.push(ix[0], inside, th[1]);
+  // A tucked thumb can fold the web back over itself; it is then inside the palm anyway,
+  // so its hull (same points, never self-crossing) is drawn instead.
+  const web = isSimple(webPts) ? webPts : hull(webPts);
+  shapes.push({ path: (ctx) => polyPath(ctx, web), poly: () => web });
   return shapes;
+}
+
+/** A point of the wrist stub (hand frame, mm) in canvas px: turned about the wrist centre by wristRot (the palm turns, the forearm less so) and shifted. */
+function wristPoint(sk: Skeleton, a: number, v: number, wristShift: Pt, wristRot: number): Pt {
+  const p = sk.toWorld(a, v);
+  const c = sk.toWorld(0, -88);
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  const cs = Math.cos(wristRot);
+  const sn = Math.sin(wristRot);
+  return { x: c.x + dx * cs - dy * sn + wristShift.x, y: c.y + dx * sn + dy * cs + wristShift.y };
 }
 
 function lerpPt(a: Pt, b: Pt, s: number): Pt {
@@ -477,7 +511,7 @@ function shadeHand(ctx: Ctx, sk: Skeleton, outlines: FingerOutline[]): void {
     gr.addColorStop(1, shade(0.22));
     ctx.fillStyle = gr;
     ctx.beginPath();
-    smoothClosed(ctx, o.pts.slice());
+    polyPath(ctx, hull(o.caps.flat()));
     ctx.fill();
   }
   // Forearm roll: the side rolled down toward the keys is a little darker.
@@ -534,7 +568,7 @@ function paintHand(ctx: Ctx, sk: Skeleton, shapes: Shape[], outlines: FingerOutl
   shapes[0].path(ctx);
   ctx.clip();
   ctx.beginPath();
-  smoothClosed(ctx, thumbPhalanges(sk).pts);
+  polyPath(ctx, thumbPhalanges(sk));
   ctx.globalAlpha = 0.22;
   ctx.fillStyle = SKIN.edge;
   ctx.fill();
@@ -626,11 +660,13 @@ function handBody(anim: HandAnimator, pose: HandPose, t: number, tf: TipFrame) {
  * One hand's silhouette at song time t as polygons (canvas px; their union is the
  * drawn shape, before the wrist fade): what the overlap checks measure.
  */
-export function handSilhouette(anim: HandAnimator, hand: PlayHand, t: number, g: HandGeometry): { sk: Skeleton; polys: Pt[][] } | null {
+export function handSilhouette(anim: HandAnimator, hand: PlayHand, t: number, g: HandGeometry): { sk: Skeleton; polys: Pt[][]; wrist: Pt[] } | null {
   const pose = anim.pose(hand, t);
   if (!pose) return null;
-  const { sk, shapes } = handBody(anim, pose, t, tipFrame(g));
-  return { sk, polys: shapes.map((s) => s.poly()) };
+  const { sk, shapes, wristShift, wristRot } = handBody(anim, pose, t, tipFrame(g));
+  // The wrist stub's two far corners (it trails or leads the palm): moving parts too, for pop checks.
+  const wrist = [wristPoint(sk, 24, -88 - FOREARM, wristShift, wristRot), wristPoint(sk, -22, -88 - FOREARM, wristShift, wristRot)];
+  return { sk, polys: shapes.map((s) => s.poly()), wrist };
 }
 
 function drawOne(

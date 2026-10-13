@@ -104,6 +104,11 @@ const THUMB_CURL_REST = 0.3;
 const THUMB_BEND = 12;
 const THUMB_BEND_LIM: [number, number] = [-15, 55];
 const MAX_TILT = 0.35; // palm rotation limit, radians (~20°)
+/** Weights of the palm placements averaged over nearby moments, by distance (see HandPose.around); [0] is half the centre's. */
+const AROUND_W = [1.5, 2, 1];
+/** Strain on the anatomy limits (squared limit terms of the palm solve) over which that averaging fades in. */
+const STRAIN_LO = 12;
+const STRAIN_HI = 26;
 /**
  * Points of the palm and wrist outline (hand frame, mm; the same outline drawHands
  * fills) plus each finger's knuckle: none may cross the line between the hands.
@@ -450,6 +455,13 @@ function solve3(A: number[][], b: number[]): number[] {
  * finger by IK (splay, then MCP/PIP in the vertical plane) with fixed bones.
  */
 export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
+  return solveAt(pose, tf, false) as Skeleton;
+}
+
+/** The palm placement alone for one pose (the least-squares solve below): canvas px from the fingertip targets' centroid, radians. */
+type PalmFit = { x: number; y: number; rot: number };
+
+function solveAt(pose: HandPose, tf: TipFrame, palmOnly: boolean): Skeleton | PalmFit {
   const dir = pose.hand === 'right' ? 1 : -1;
   const st = pose.style;
   // A leap's arc: the hand looks ~4% bigger at the top (closer to the eye).
@@ -508,9 +520,15 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
     const far = reachRange(f, Math.max(0, H_MIN + KNUCKLE_DZ[f] - (f === 5 ? rollMaxLM : 0) - zk))[1];
     return [near, far];
   });
-  const residuals = (p: { x: number; y: number; rot: number }): number[] => {
+  // `strain` (optional) collects the squared anatomy-limit terms: how hard the hand is pressed
+  // against what it can reach and spread.
+  const residuals = (p: { x: number; y: number; rot: number }, strain?: { s: number }): number[] => {
     const { toLocal } = frame(p, k, dir);
     const r: number[] = [];
+    const lim = (x: number) => {
+      if (strain) strain.s += x * x;
+      return x;
+    };
     for (let f = 1; f <= 5; f++) {
       const spec = FINGERS[f - 1];
       const e = engage[f];
@@ -527,9 +545,9 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
         const Dmax = spec.bones[0] + REACH_MAX[1];
         // A spring toward where a relaxed thumb's tip sits on the palm (convex: one minimum).
         r.push((soft * 0.5 * (ta - thumbRest[0])) / 10, (soft * 0.5 * (tv - thumbRest[1])) / 10);
-        r.push(hard * hinge(D - 0.97 * Dmax) / 4);
-        r.push(hard * hinge(ang - spec.splay[1] + 4) / 8);
-        r.push(hard * hinge(spec.splay[0] + 4 - ang) / 8);
+        r.push(lim(hard * hinge(D - 0.97 * Dmax) / 4));
+        r.push(lim(hard * hinge(ang - spec.splay[1] + 4) / 8));
+        r.push(lim(hard * hinge(spec.splay[0] + 4 - ang) / 8));
         continue;
       }
       // A spring toward the finger's relaxed tip position (the dome).
@@ -538,12 +556,12 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
       const n = spec.neutral * RAD;
       r.push((soft * (ta - (spec.base[0] + pref * Math.sin(n)))) / 10);
       r.push((soft * (tv - (spec.base[1] + pref * Math.cos(n)))) / 10);
-      r.push((hard * hinge(d - 0.97 * reachLM[f][1])) / 4);
-      r.push((hard * hinge(reachLM[f][0] + 2 - d)) / 4);
+      r.push(lim((hard * hinge(d - 0.97 * reachLM[f][1])) / 4));
+      r.push(lim((hard * hinge(reachLM[f][0] + 2 - d)) / 4));
       const psi = ang - spec.neutral;
       // Splay narrows as the knuckles flex; at rest it is ~80% of the flat-hand range.
-      r.push((hard * hinge(psi - 0.85 * spec.splay[1] + 2)) / 6);
-      r.push((hard * hinge(0.85 * spec.splay[0] + 2 - psi)) / 6);
+      r.push(lim((hard * hinge(psi - 0.85 * spec.splay[1] + 2)) / 6));
+      r.push(lim((hard * hinge(0.85 * spec.splay[0] + 2 - psi)) / 6));
     }
     r.push((p.rot - rotBias) * 4);
     r.push(hinge(Math.abs(p.rot) - MAX_TILT) * 300);
@@ -601,7 +619,40 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
     }
     return p;
   };
-  const best = lm({ x: xNat, y: yNat, rot: 0 });
+  let best = lm({ x: xNat, y: yNat, rot: 0 });
+  const own = best;
+  // Where the fingertips are headed, on average: the palm's offset from it is what gets averaged.
+  let cx = 0;
+  let cy = 0;
+  for (let f = 1; f <= 5; f++) (cx += targets[f].x / 5), (cy += targets[f].y / 5);
+  if (palmOnly) return { x: best.x - cx, y: best.y - cy, rot: best.rot };
+  // Near the edge of what the hand can span (a wide thumb-to-little-finger stretch opening),
+  // the best palm placement can switch from "shift" to "tilt" from one frame to the next: a
+  // visible jump of the whole hand. There the palm is the weighted mean of its placements
+  // over a few nearby moments (pose.around, pure functions of song time like everything
+  // here), so the switch becomes a short glide. What is averaged is the palm's offset from
+  // where the fingertips are headed, so a hand gliding to a new position isn't held back or
+  // dragged ahead. It fades in with the strain on the anatomy limits (a held octave sits at
+  // ~9, an opening stretch switches at ~30): everyday playing keeps its own placement exactly.
+  const strain = { s: 0 };
+  residuals(own, strain);
+  const sw0 = Math.max(0, Math.min(1, (strain.s - STRAIN_LO) / (STRAIN_HI - STRAIN_LO)));
+  const strainW = sw0 * sw0 * (3 - 2 * sw0);
+  if (pose.around?.length && strainW > 0) {
+    let sw = 2 * AROUND_W[0];
+    let sx = (best.x - cx) * sw;
+    let sy = (best.y - cy) * sw;
+    let sr = best.rot * sw;
+    for (const a of pose.around) {
+      const w = AROUND_W[a.w];
+      const q = solveAt(a.pose, tf, true) as PalmFit;
+      sx += q.x * w;
+      sy += q.y * w;
+      sr += q.rot * w;
+      sw += w;
+    }
+    best = { x: own.x + strainW * (cx + sx / sw - own.x), y: own.y + strainW * (cy + sy / sw - own.y), rot: own.rot + strainW * (sr / sw - own.rot) };
+  }
   // Never tilt past the limit, whatever the springs want.
   const rot = Math.max(-MAX_TILT, Math.min(MAX_TILT, best.rot));
   const { toWorld, toLocal } = frame({ x: best.x, y: best.y, rot }, k, dir);
@@ -615,6 +666,7 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
   let h = hPass;
   const zKey = (f: number) => BLACK_Z * pose.fingers[f].depth;
   const local = [0, 1, 2, 3, 4, 5].map((f) => (f ? toLocal(effTarget(f)) : ([0, 0] as [number, number])));
+  const ownLocal = own === best ? toLocal : frame({ x: own.x, y: own.y, rot: Math.max(-MAX_TILT, Math.min(MAX_TILT, own.rot)) }, k, dir).toLocal;
   // Lower the knuckles only as far as a stretched finger needs (the hand flattens to
   // reach, it never stretches a bone), weighted by how engaged that finger is so the
   // height glides. The little finger first gets its reach from the forearm rolling
@@ -623,7 +675,10 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
   const need = [0, 0, 0, 0, 0, 0];
   for (let f = 2; f <= 5; f++) {
     if (engage[f] <= 0) continue;
-    const d = Math.hypot(local[f][0] - FINGERS[f - 1].base[0], local[f][1] - FINGERS[f - 1].base[1]);
+    // Measured from this moment's own palm solve (before the averaging above), so the height
+    // is exactly what the hand needs here and doesn't dip as the averaged palm passes by.
+    const lo = ownLocal(effTarget(f));
+    const d = Math.hypot(lo[0] - FINGERS[f - 1].base[0], lo[1] - FINGERS[f - 1].base[1]);
     need[f] = Math.max(0, h + KNUCKLE_DZ[f] - zKey(f) - maxDrop(f, d + 1));
   }
   const pinkyRoll = Math.min(rollMax, need[5]) * engage[5];

@@ -70,6 +70,11 @@ export interface HandPose {
    */
   lagStyle: PassageStyle[];
   /**
+   * The poses a little before and after (AROUND_DT, 2·AROUND_DT; `w` = 1 or 2 steps away),
+   * for the palm solve to average over (skeleton.ts). Absent on those poses themselves.
+   */
+  around?: { pose: HandPose; w: number }[];
+  /**
    * The line between the two hands (white keys, keyU): this hand stays on its side of it
    * (the left hand to the left), palm and fingers, with a small gap. NaN with one hand.
    */
@@ -177,7 +182,22 @@ const LIFT = 0.07; // lifting off after the note ends
 const RELEASE_BLEND = 0.1; // a lifted finger rejoins the hand over this long
 const APPROACH = 0.18; // a finger starts reaching for its next key this long before landing
 const ENGAGE_RELEASE = 0.3;
+/** Spacing of the nearby moments the palm placement is averaged over, seconds (HandPose.around). */
+const AROUND_DT = 0.025;
+const STRETCH_OPEN = 0.32; // a finger opening the hand into a wide stretch starts this long before landing
 const REACH_AHEAD = 4.5; // ...but not for a key further than this (white keys) from one still held
+/**
+ * How far (white keys) finger f may reach ahead from a key finger hf still holds. Beyond
+ * REACH_AHEAD the key is for the hand's next position, not this one, unless the two fingers
+ * can span it in one hand shape (an octave from thumb to little finger): then the finger
+ * opens toward it ahead of time instead of the whole stretch opening in the last 60 ms.
+ */
+function reachAhead(f: number, hf: number, d: number, dirH: number): number {
+  const apart = Math.abs(f - hf);
+  // Only an opening stretch on the side that finger lies (no crossings).
+  if (apart < 2 || Math.sign(d) !== Math.sign(f - hf) * dirH) return REACH_AHEAD;
+  return Math.max(REACH_AHEAD, (MAX_HAND_U * apart) / 4);
+}
 const HELD_FADE_IN = 0.1;
 /** A finger reaches ahead only for a key within this many white keys of where the hand holds it now... */
 const REACH_NEAR = 2;
@@ -728,6 +748,19 @@ export class HandAnimator {
 
 
   pose(hand: PlayHand, t: number): HandPose | null {
+    const p = this.poseAt(hand, t);
+    if (!p) return null;
+    const around: { pose: HandPose; w: number }[] = [];
+    for (const w of [1, 2])
+      for (const s of [-1, 1]) {
+        const q = this.poseAt(hand, t + s * w * AROUND_DT);
+        if (q) around.push({ pose: q, w });
+      }
+    p.around = around;
+    return p;
+  }
+
+  private poseAt(hand: PlayHand, t: number): HandPose | null {
     const raw = this.raw(hand, t);
     if (!raw) return null;
     const { g, anchored, hold } = raw;
@@ -758,14 +791,15 @@ export class HandAnimator {
     const hold = [0, 0, 0, 0, 0, 0];
     // Keys held right now, and how firmly (fades as each finger lets go): a finger only
     // reaches ahead for its next key if that key is within a hand's reach of them.
-    const held: { u: number; w: number }[] = [];
+    const held: { u: number; w: number; f: number }[] = [];
     for (let f = 1; f <= 5; f++) {
       const list = this.presses[hand][f];
       const k = lowerBound(list, t + PRESS_IN, 'start') - 1;
       // A key counts as held from the moment its finger starts down (fading in, so a new
       // far-away key doesn't yank other fingers back in one frame) until it lets go.
-      if (k >= 0) held.push({ u: list[k].u, w: Math.max(0, Math.min(smooth((t - (list[k].start - PRESS_IN)) / HELD_FADE_IN), 1 - smooth((t - list[k].end) / RELEASE_BLEND))) });
+      if (k >= 0) held.push({ f, u: list[k].u, w: Math.max(0, Math.min(smooth((t - (list[k].start - PRESS_IN)) / HELD_FADE_IN), 1 - smooth((t - list[k].end) / RELEASE_BLEND))) });
     }
+    const dirH = hand === 'right' ? 1 : -1;
     for (let f = 1; f <= 5; f++) {
       let u = g.u[f] + shift;
       let depth = g.depth[f];
@@ -788,7 +822,15 @@ export class HandAnimator {
           lead = tuck ? Math.max(0.06, land - Math.max(list[k].end, land - THUMB_EARLY)) : APPROACH * 2;
         }
         let far = 0;
-        for (const h of held) if (Math.abs(h.u - next.u) > REACH_AHEAD) far = Math.max(far, h.w);
+        let stretch = false;
+        for (const h of held) {
+          const dh = Math.abs(h.u - next.u);
+          if (dh > reachAhead(f, h.f, next.u - h.u, dirH)) far = Math.max(far, h.w);
+          else if (dh > REACH_AHEAD && h.w > 0.5) stretch = true;
+        }
+        // Opening the hand into a wide stretch (an octave) takes a pianist a moment: start
+        // early, but not before this finger has let go of its last key.
+        if (stretch && f > 1) lead = Math.max(lead, Math.min(STRETCH_OPEN, k >= 0 ? land - list[k].end : STRETCH_OPEN));
         // ...and not in the last moment before landing: the finger is going there regardless.
         far *= 1 - smooth((t - (land - LAND_FREE)) / LAND_FREE);
         const ramp = smooth((t - (land - lead)) / lead) * (1 - far);

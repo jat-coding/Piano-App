@@ -18,6 +18,15 @@
 //     it is lit in on it (within 0.12 white key), and no pressing finger of the other hand. HARD
 //  P3 the split: no left-hand note right of a right-hand note when both can be on screen
 //     together (sounding spans < 3.2 s apart), nor on the same key within 1 s.           HARD
+//  P4 each hand's own outline (phase 10): every piece of the silhouette (palm, finger webs,
+//     fingers, thumb web, thumb base), as handSilhouette gives them, is a simple polygon in
+//     every frame: no edge crosses another edge of the same piece.                       HARD
+//  P5 no popping outline: between consecutive frames no piece of a hand's silhouette moves
+//     (Hausdorff distance) more than POP_SLACK white keys beyond the furthest any joint of
+//     that hand (or its wrist stub's end) moved. An outline that jumps while the bones
+//     glide is a pop.                                                                    HARD
+// Also printed (not gated): the fastest one-frame change of a hand's thumb-to-little-finger
+// spread, white keys (a stretch that opens in a frame or two shows up here).
 // Unfingered notes are printed (a note no finger plays is drawn hollow, never lit).
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
@@ -25,6 +34,7 @@ import { readFileSync, rmSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
 const MIN_GAP = 8;
+const POP_SLACK = 0.25;
 const args = process.argv.slice(2);
 const opt = (name, def) => {
   const i = args.indexOf(name);
@@ -43,13 +53,62 @@ if (!args.length) {
 
 const entry = `
 import { ExportFrameRenderer } from './src/export/frameRenderer';
-import { drawHands, tipFrame } from './src/hands/drawHands';
+import { drawHands, tipFrame, handSilhouette, handUnit } from './src/hands/drawHands';
 import { solveSkeleton } from './src/hands/skeleton';
 import { crossed } from './src/hands/splitLine';
 import { mergeGhostReonsets } from './src/lib/reonsets';
 const W = 1080, H = 1920;
 // As library getSong does for transcribed songs.
 window.prep = (rec) => ({ ...rec, notes: rec.kind === 'midi' ? rec.notes : mergeGhostReonsets(rec.notes).notes });
+// Proper crossings between non-adjacent edges of one closed polygon.
+const selfCrossings = (P) => {
+  const n = P.length;
+  let c = 0;
+  const cr = (a, b, q) => (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x);
+  for (let i = 0; i < n; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const p = P[j], q = P[(j + 1) % n];
+      if (Math.max(p.x, q.x) < x0 || Math.min(p.x, q.x) > x1 || Math.max(p.y, q.y) < y0 || Math.min(p.y, q.y) > y1) continue;
+      const d1 = cr(a, b, p), d2 = cr(a, b, q), d3 = cr(p, q, a), d4 = cr(p, q, b);
+      if (((d1 > 1e-9 && d2 < -1e-9) || (d1 < -1e-9 && d2 > 1e-9)) && ((d3 > 1e-9 && d4 < -1e-9) || (d3 < -1e-9 && d4 > 1e-9))) c++;
+    }
+  }
+  return c;
+};
+// Symmetric Hausdorff distance between two closed outlines: every point of one (vertices and
+// points along its edges) to the nearest point on the other's edges.
+const hausdorff = (A, B) => {
+  const segD2 = (p, a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    const s = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    return (p.x - a.x - s * dx) ** 2 + (p.y - a.y - s * dy) ** 2;
+  };
+  const dense = (P) => {
+    const out = [];
+    for (let i = 0; i < P.length; i++) {
+      const a = P[i], b = P[(i + 1) % P.length];
+      const k = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 3));
+      for (let j = 0; j < k; j++) out.push({ x: a.x + ((b.x - a.x) * j) / k, y: a.y + ((b.y - a.y) * j) / k });
+    }
+    return out;
+  };
+  const one = (X, Y) => {
+    let m = 0;
+    for (const p of dense(X)) {
+      let d = Infinity;
+      for (let i = 0; i < Y.length && d > m; i++) d = Math.min(d, segD2(p, Y[i], Y[(i + 1) % Y.length]));
+      m = Math.max(m, d);
+    }
+    return Math.sqrt(m);
+  };
+  return Math.max(one(A, B), one(B, A));
+};
+let prevSil = null;
+window.resetSil = () => { prevSil = null; };
 window.measure = (song, layout, times, minGap) => {
   const r = new ExportFrameRenderer(song, layout, true);
   const anim = r.hands, g = r.handGeom;
@@ -95,7 +154,35 @@ window.measure = (song, layout, times, minGap) => {
       if (sk[other] && [1, 2, 3, 4, 5].some((f) => inKey(tipX(other, f)) && sk[other].fingers[f].press > 0.3)) why += (why ? ', ' : '') + other + ' hand presses it';
       if (why) lit.push(midi + ' (' + hand + '): ' + why);
     }
-    frames.push({ t, over, gap, lit });
+    // P4/P5: each hand's own outline.
+    const unit = handUnit(g);
+    const selfX = [], pop = { d: 0, hand: '', piece: -1 }, spread = { d: 0, hand: '' };
+    const cur = {};
+    for (const hd of ['left', 'right']) {
+      const s = handSilhouette(anim, hd, t, g);
+      if (!s) continue;
+      const joints = [];
+      for (let f = 1; f <= 5; f++) joints.push(...s.sk.fingers[f].joints);
+      joints.push(...(s.wrist ?? []));
+      const tip = (f) => s.sk.fingers[f].joints[s.sk.fingers[f].joints.length - 1];
+      cur[hd] = { polys: s.polys, joints, span: Math.hypot(tip(5).x - tip(1).x, tip(5).y - tip(1).y) };
+      s.polys.forEach((P, i) => { const c = selfCrossings(P); if (c) selfX.push(hd + ' piece ' + i + ': ' + c); });
+      const pv = prevSil && prevSil.t > t - 1.5 / 30 - 1e-6 && prevSil.t < t ? prevSil[hd] : null;
+      if (pv) {
+        const ds = Math.abs(cur[hd].span - pv.span) / unit;
+        if (ds > spread.d) Object.assign(spread, { d: ds, hand: hd });
+      }
+      if (pv && pv.polys.length === s.polys.length) {
+        let jm = 0;
+        joints.forEach((j, i) => { const q = pv.joints[i]; if (q) jm = Math.max(jm, Math.hypot(j.x - q.x, j.y - q.y)); });
+        s.polys.forEach((P, i) => {
+          const ex = (hausdorff(P, pv.polys[i]) - jm) / unit;
+          if (ex > pop.d) Object.assign(pop, { d: ex, hand: hd, piece: i });
+        });
+      }
+    }
+    prevSil = { t, ...cur };
+    frames.push({ t, over, gap, lit, selfX, pop, spread });
   }
   const N = song.notes, split = [];
   const on = (i) => anim.inRange(i);
@@ -158,6 +245,7 @@ for (const file of args) {
   for (let i = Math.ceil(from * fps); i / fps <= end; i++) times.push(i / fps);
   const frames = [];
   let res;
+  await page.evaluate(() => window.resetSil());
   for (let k = 0; k < times.length; k += 200) {
     res = await page.evaluate(([s, l, t, m]) => window.measure(s, l, t, m), [song, layout, times.slice(k, k + 200), MIN_GAP]);
     frames.push(...res.frames);
@@ -174,7 +262,17 @@ for (const file of args) {
   console.log(`${ok2 ? 'PASS' : 'FAIL'}: ${name}: lit keys without a finger of their colour's hand: ${lit.length} frames${lit.length ? ` (${runs(frames, (f) => f.lit.length)})` : ''}`);
   for (const f of lit.slice(0, 8)) console.log(`    ${f.t.toFixed(3)} s: ${f.lit.join('; ')}`);
   console.log(`${ok3 ? 'PASS' : 'FAIL'}: ${name}: left-hand notes right of right-hand notes on screen together: ${res.split.length}${res.split.length ? ` (${res.split.slice(0, 6).join(', ')})` : ''}; notes no finger plays (drawn hollow): ${res.unfingered}`);
-  failed += !ok1 + !ok2 + !ok3;
+  const sx = frames.filter((f) => f.selfX.length);
+  const pops = frames.filter((f) => f.pop.d > POP_SLACK);
+  const worst = frames.reduce((a, f) => (f.pop.d > a.pop.d ? f : a), frames[0]);
+  const ok4 = sx.length === 0;
+  const ok5 = pops.length === 0;
+  console.log(`${ok4 ? 'PASS' : 'FAIL'}: ${name}: hand outline pieces crossing themselves: ${sx.length} frames${sx.length ? ` (${runs(frames, (f) => f.selfX.length)})` : ''}`);
+  for (const f of sx.slice(0, 4)) console.log(`    ${f.t.toFixed(3)} s: ${f.selfX.join('; ')}`);
+  console.log(`${ok5 ? 'PASS' : 'FAIL'}: ${name}: outline pops (a piece moving > ${POP_SLACK} white key beyond its joints): ${pops.length} frames${pops.length ? ` (${runs(frames, (f) => f.pop.d > POP_SLACK)})` : ''}; worst ${worst.pop.d.toFixed(3)} key at ${worst.t.toFixed(3)} s (${worst.pop.hand} piece ${worst.pop.piece})`);
+  const fast = frames.reduce((a, f) => (f.spread.d > a.spread.d ? f : a), frames[0]);
+  console.log(`info: ${name}: fastest change of a hand's thumb-to-little-finger spread: ${fast.spread.d.toFixed(2)} white key in one frame at ${fast.t.toFixed(3)} s (${fast.spread.hand})`);
+  failed += !ok1 + !ok2 + !ok3 + !ok4 + !ok5;
 }
 await browser.close();
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall export-picture hand checks passed');
