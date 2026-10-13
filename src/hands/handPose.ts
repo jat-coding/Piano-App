@@ -20,6 +20,12 @@ export interface FingerPose {
   u: number;
   depth: number;
   press: number;
+  /**
+   * 0 = an idle finger (relaxes into its rest curl), 1 = on or landing on a key.
+   * Ramps in while the finger approaches its next key and out after it lets go,
+   * so the skeleton blends smoothly between the two.
+   */
+  engage: number;
 }
 
 export interface HandPose {
@@ -52,6 +58,9 @@ const LEAD = 0.035; // fingers arrive this long before the key goes down
 const PRESS_IN = 0.03; // the dip into the key
 const LIFT = 0.07; // lifting off after the note ends
 const RELEASE_BLEND = 0.1; // a lifted finger rejoins the hand over this long
+const APPROACH = 0.18; // a finger starts reaching for its next key this long before landing
+const ENGAGE_RELEASE = 0.3;
+const REACH_AHEAD = 4.5; // ...but not for a key further than this (white keys) from one still held
 const SPACING = 0.95; // a free finger's distance from its neighbour, white keys
 /** Thumb to little finger never wider than this (white keys): an octave plus a little. */
 const MAX_HAND_U = 7.3;
@@ -311,15 +320,36 @@ export class HandAnimator {
   pose(hand: PlayHand, t: number): HandPose | null {
     if (!this.hasHand(hand)) return null;
     const g = this.glide(hand, t);
-    const fingers: FingerPose[] = [{ u: 0, depth: 0, press: 0 }];
+    const fingers: FingerPose[] = [{ u: 0, depth: 0, press: 0, engage: 0 }];
     // Fingers on a key right now (landing or holding): those never move below.
     const anchored = [false, false, false, false, false, false];
+    // Keys held right now, and how firmly (fades as each finger lets go): a finger only
+    // reaches ahead for its next key if that key is within a hand's reach of them.
+    const held: { u: number; w: number }[] = [];
+    for (let f = 1; f <= 5; f++) {
+      const list = this.presses[hand][f];
+      const k = lowerBound(list, t + PRESS_IN, 'start') - 1;
+      if (k >= 0) held.push({ u: list[k].u, w: Math.max(0, 1 - smooth((t - list[k].end) / RELEASE_BLEND)) });
+    }
     for (let f = 1; f <= 5; f++) {
       let u = g.u[f];
       let depth = g.depth[f];
       let press = 0;
+      let engage = 0;
       const list = this.presses[hand][f];
       const k = lowerBound(list, t + PRESS_IN, 'start') - 1; // latest press that has begun
+      if (k + 1 < list.length) {
+        // Reaching for the next key ahead of the hand: this is what makes a thumb
+        // pass under the hand while the other fingers still hold their keys.
+        const next = list[k + 1];
+        const land = next.start - PRESS_IN;
+        const lead = f === 1 ? APPROACH * 2 : APPROACH;
+        let far = 0;
+        for (const h of held) if (Math.abs(h.u - next.u) > REACH_AHEAD) far = Math.max(far, h.w);
+        engage = smooth((t - (land - lead)) / lead) * (1 - far);
+        u = lerp(u, next.u, engage);
+        depth = lerp(depth, next.depth, engage);
+      }
       if (k >= 0) {
         const p = list[k];
         // Down at the note's start, up at its end.
@@ -330,8 +360,11 @@ export class HandAnimator {
         u = lerp(u, p.u, w);
         depth = lerp(depth, p.depth, w);
         anchored[f] = t >= p.start - PRESS_IN && t <= p.end;
+        // The palm lets go of a released finger more slowly than the fingertip does,
+        // so the hand settles instead of snapping.
+        engage = Math.max(engage, 1 - smooth((t - p.end) / ENGAGE_RELEASE));
       }
-      fingers.push({ u, depth, press: Math.max(0, press) });
+      fingers.push({ u, depth, press: Math.max(0, press), engage });
     }
     settle(fingers, anchored, hand === 'right' ? 1 : -1);
     return { hand, fingers, speed: g.speed };

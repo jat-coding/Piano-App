@@ -143,7 +143,15 @@ export class ExportFrameRenderer {
     this.drawStrike(active);
     this.drawKeyboard(active);
     this.drawFooter();
-    if (this.hands && this.handGeom) drawHands(ctx, this.hands, t, this.handGeom);
+    if (this.hands && this.handGeom) {
+      // Life-size wrists run past the hand room: they slip under the footer's edge.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, EXPORT_W, this.footerTop);
+      ctx.clip();
+      drawHands(ctx, this.hands, t, this.handGeom);
+      ctx.restore();
+    }
   }
 
   private drawVideo(video?: VideoPicture | null): void {
