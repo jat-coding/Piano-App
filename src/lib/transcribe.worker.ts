@@ -2,6 +2,7 @@
 import * as tf from '@tensorflow/tfjs';
 import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
 import { BasicPitch, outputToNotesPoly, noteFramesToTime } from '@spotify/basic-pitch';
+import { resolveSemitoneTrills } from './trills';
 
 const MODEL_URL = '/basic-pitch-model/model.json';
 const FRAME_MS = (256 / 22050) * 1000; // model hop → ms per frame (~11.6ms)
@@ -66,7 +67,9 @@ function derive(params: CleanupParams): RawNote[] {
     minLenFrames,
     true,
   );
-  return noteFramesToTime(poly).map((n) => ({
+  // Semitone trills under the pedal come out as one key repeated; re-read them (see trills.ts).
+  const { notes } = resolveSemitoneTrills(lastFrames, lastOnsets, poly, params.onsetThresh, params.frameThresh, minLenFrames);
+  return noteFramesToTime(notes).map((n) => ({
     startTimeSeconds: n.startTimeSeconds,
     durationSeconds: n.durationSeconds,
     pitchMidi: n.pitchMidi,

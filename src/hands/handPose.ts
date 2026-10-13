@@ -171,6 +171,8 @@ function detectPassages(evs: HandEvent[], notes: NoteEvent[]): Passage[] {
 
 const LEAD = 0.035; // fingers arrive this long before the key goes down
 const PRESS_IN = 0.03; // the dip into the key
+/** A hand move this small (white keys) doesn't take a finger off its key early (see fingerOff). */
+const SMALL_SHIFT = 1;
 const LIFT = 0.07; // lifting off after the note ends
 const RELEASE_BLEND = 0.1; // a lifted finger rejoins the hand over this long
 const APPROACH = 0.18; // a finger starts reaching for its next key this long before landing
@@ -457,7 +459,11 @@ export class HandAnimator {
           // still sounds then. Until that moment every pose keeps it on the key.
           for (let k = eventOf.get(p.note)! + 1; k < ks.length && ks[k - 1].time < p.end; k++) {
             if (Math.abs(ks[k].u[f] - p.u) < 0.05) continue;
-            const go = glideWindow(ks[k - 1], ks[k]).start;
+            // If the hand only shifts a little (a trill, a step to the next key), the finger
+            // stays down until the next strike lands. Lifting it with the glide's start left
+            // fast trills lit for a quarter of each note and drawn pedal-held for the rest.
+            const w = glideWindow(ks[k - 1], ks[k]);
+            const go = w.dist <= SMALL_SHIFT ? w.arrive - PRESS_IN : w.start;
             if (go < p.end) p.end = Math.max(p.start + 0.01, go);
             break;
           }
