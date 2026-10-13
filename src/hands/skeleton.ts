@@ -104,6 +104,17 @@ const THUMB_CURL_REST = 0.3;
 const THUMB_BEND = 12;
 const THUMB_BEND_LIM: [number, number] = [-15, 55];
 const MAX_TILT = 0.35; // palm rotation limit, radians (~20°)
+/**
+ * Points of the palm and wrist outline (hand frame, mm; the same outline drawHands
+ * fills) plus each finger's knuckle: none may cross the line between the hands.
+ */
+const PALM_EDGE: [number, number][] = [
+  [-36, -6], [-33, 3], [-19, 7], [-9, 9], [10, 6], [25, 0], [34, -9], [36, -30], [32, -58], [26, -84],
+  [24, -134], [-22, -134], [-24, -84], [-31, -64], [-37, -34],
+  [-28, 8], [-9, 12], [10, 9], [28, 1],
+];
+/** Gap kept between the hands, each side of the line, mm (on top of SIDE_TIP for fingertips). */
+const WALL_GAP = 2;
 /** The forearm follows the palm's rotation with this gain, so the wrist bends sideways only a little. */
 export const FOREARM_GAIN = 0.7;
 
@@ -465,6 +476,11 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
   };
 
   const rotBias = st.rotBias * RAD;
+  // The line between the hands (see HandPose.wall), canvas px; side = +1 for the left hand
+  // (it must stay left of the line), -1 for the right.
+  const wallW = Number.isFinite(pose.wall) ? pose.wallW ?? 0 : 0;
+  const wallX = wallW > 0 ? tf.uToX(pose.wall) : 0;
+  const side = -dir;
   // Thumb rest tip in the hand frame.
   const thumbRest: [number, number] = (() => {
     const spec = FINGERS[0];
@@ -532,6 +548,14 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
     r.push((p.rot - rotBias) * 4);
     r.push(hinge(Math.abs(p.rot) - MAX_TILT) * 300);
     r.push((p.y - yNat) / (k * 60));
+    if (wallW > 0) {
+      // The palm stays on its side of the line between the hands: it shifts or turns away.
+      const { toWorld } = frame(p, k, dir);
+      for (const [a, v] of PALM_EDGE) {
+        const q = toWorld(a, v);
+        r.push((wallW * hinge(side * (q.x - wallX) + WALL_GAP * k)) / k);
+      }
+    }
     return r;
   };
 
@@ -629,7 +653,21 @@ export function solveSkeleton(pose: HandPose, tf: TipFrame): Skeleton {
         ta = thumbRest[0] + (ta - thumbRest[0]) * w;
         tv = thumbRest[1] + (tv - thumbRest[1]) * w;
       }
-      const th = thumbIK(ta, tv);
+      let th = thumbIK(ta, tv);
+      if (wallW > 0 && e < 1) {
+        // A thumb that isn't on its key folds in rather than poke past the line between
+        // the hands (its tip, then the whole thumb, moves toward the little finger).
+        for (let it = 0; it < 3; it++) {
+          let over = 0;
+          for (const [pa, pv, w] of [[th.mcp[0], th.mcp[1], 1.1], [th.tip[0], th.tip[1], 0.8]]) {
+            const q = toWorld(pa, pv);
+            over = Math.max(over, side * (q.x - wallX) + (w * FINGERS[0].width[1] * 0.5 + WALL_GAP) * k);
+          }
+          if (over <= 0) break;
+          ta += (over / k) * wallW * (1 - e);
+          th = thumbIK(ta, tv);
+        }
+      }
       const c = Math.max(th.curl, 0.12 * (1 - e)); // a relaxed thumb is never dead straight
       const a1 = THUMB_FLEX[0] * c;
       const a2 = THUMB_FLEX[1] * c;

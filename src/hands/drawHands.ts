@@ -106,6 +106,31 @@ function smoothClosed(ctx: Ctx, pts: Pt[]): void {
 
 interface Shape {
   path: (ctx: Ctx) => void;
+  /** The same outline as a polygon (curves sampled), canvas px: for overlap checks. */
+  poly: () => Pt[];
+}
+
+/** Points along smoothClosed's curve (the same Catmull-Rom Béziers), `per` per segment. */
+function sampleClosed(pts: Pt[], per = 4): Pt[] {
+  const n = pts.length;
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const p3 = pts[(i + 2) % n];
+    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
+    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
+    for (let j = 0; j < per; j++) {
+      const s = j / per;
+      const r = 1 - s;
+      out.push({
+        x: r * r * r * p1.x + 3 * r * r * s * c1.x + 3 * r * s * s * c2.x + s * s * s * p2.x,
+        y: r * r * r * p1.y + 3 * r * r * s * c1.y + 3 * r * s * s * c2.y + s * s * s * p2.y,
+      });
+    }
+  }
+  return out;
 }
 
 /** One side of a finger and its round tip, as points for a smooth closed outline. */
@@ -260,7 +285,7 @@ function handShapes(sk: Skeleton, outlines: FingerOutline[], wristShift: Pt, wri
   };
   palmPts.push(wristAt(24, -88 - FOREARM), wristAt(-22, -88 - FOREARM));
   palmPts.push(P(-24, -84), P(-31, -64), P(-37, -34));
-  shapes.push({ path: (ctx) => smoothClosed(ctx, palmPts) });
+  shapes.push({ path: (ctx) => smoothClosed(ctx, palmPts), poly: () => sampleClosed(palmPts) });
   if (palmOnly) return shapes;
 
   // Webs between the long fingers, so they grow out of the palm instead of being stuck on.
@@ -279,12 +304,13 @@ function handShapes(sk: Skeleton, outlines: FingerOutline[], wristShift: Pt, wri
         ctx.lineTo(b0.x, b0.y);
         ctx.closePath();
       },
+      poly: () => [a0, pa, pb, b0],
     });
   }
 
   for (let f = 1; f <= 5; f++) {
     const pts = outlines[f].pts.map(sh);
-    shapes.push({ path: (ctx) => smoothClosed(ctx, pts) });
+    shapes.push({ path: (ctx) => smoothClosed(ctx, pts), poly: () => sampleClosed(pts) });
   }
 
   // The thumb web: from the thumb's first joint to the index knuckle, so the thumb
@@ -303,6 +329,16 @@ function handShapes(sk: Skeleton, outlines: FingerOutline[], wristShift: Pt, wri
       ctx.quadraticCurveTo(inner.x, inner.y, idx.x, idx.y);
       ctx.lineTo(w2.x, w2.y);
       ctx.closePath();
+    },
+    poly: () => {
+      const out = [cmc, th[1], webA];
+      for (let i = 1; i < 8; i++) {
+        const s = i / 8;
+        const r = 1 - s;
+        out.push({ x: r * r * webA.x + 2 * r * s * inner.x + s * s * idx.x, y: r * r * webA.y + 2 * r * s * inner.y + s * s * idx.y });
+      }
+      out.push(idx, w2);
+      return out;
     },
   });
   return shapes;
@@ -561,20 +597,13 @@ function drawShadow(ctx: CanvasRenderingContext2D, sk: Skeleton, wristShift: Pt,
   ctx.restore();
 }
 
-function drawOne(
-  ctx: CanvasRenderingContext2D,
-  anim: HandAnimator,
-  pose: HandPose,
-  t: number,
-  g: HandGeometry,
-  tf: TipFrame,
-  alpha: number,
-  ghost = false,
-): void {
+/**
+ * The solved hand at t and its silhouette pieces. The wrist trails the hand for small
+ * moves, and leads it (the arm moves first) when the hand shifts to a new position.
+ * Cheap: no second solve.
+ */
+function handBody(anim: HandAnimator, pose: HandPose, t: number, tf: TipFrame) {
   const sk = solveSkeleton(pose, tf);
-  // The wrist trails the hand for small moves, and leads it (the arm moves first)
-  // when the hand shifts to a new position. Cheap: no second solve.
-  let wristShift: Pt = { x: 0, y: 0 };
   // The forearm turns FOREARM_GAIN as much as the palm: the stub turns back by the rest.
   const wristRot = -sk.palm.rot * (1 - FOREARM_GAIN);
   const avgX = (p: HandPose) => {
@@ -590,9 +619,34 @@ function drawOne(
     const nextPose = anim.pose(pose.hand, t + WRIST_LEAD);
     if (nextPose) lead = avgX(nextPose) - avgX(pose);
   }
-  wristShift = { x: (trail * (1 - shiftW) + lead * shiftW) * 0.35, y: 0 };
+  const wristShift: Pt = { x: (trail * (1 - shiftW) + lead * shiftW) * 0.35, y: 0 };
   const outlines = [null as unknown as FingerOutline, ...[1, 2, 3, 4, 5].map((f) => fingerShape(sk, f))];
   const shapes = handShapes(sk, outlines, wristShift, wristRot);
+  return { sk, wristShift, wristRot, outlines, shapes };
+}
+
+/**
+ * One hand's silhouette at song time t as polygons (canvas px; their union is the
+ * drawn shape, before the wrist fade): what the overlap checks measure.
+ */
+export function handSilhouette(anim: HandAnimator, hand: PlayHand, t: number, g: HandGeometry): { sk: Skeleton; polys: Pt[][] } | null {
+  const pose = anim.pose(hand, t);
+  if (!pose) return null;
+  const { sk, shapes } = handBody(anim, pose, t, tipFrame(g));
+  return { sk, polys: shapes.map((s) => s.poly()) };
+}
+
+function drawOne(
+  ctx: CanvasRenderingContext2D,
+  anim: HandAnimator,
+  pose: HandPose,
+  t: number,
+  g: HandGeometry,
+  tf: TipFrame,
+  alpha: number,
+  ghost = false,
+): void {
+  const { sk, wristShift, wristRot, outlines, shapes } = handBody(anim, pose, t, tf);
   const edgeW = Math.max(0.7, tf.unit * 0.035);
 
   // Bounds: every joint plus the palm/wrist.
@@ -665,7 +719,9 @@ export function drawHands(
   show: Record<PlayHand, boolean> = { left: true, right: true },
 ): void {
   const tf = tipFrame(g);
-  for (const hand of ['left', 'right'] as PlayHand[]) {
+  // The hand on top goes last (only matters for a forced crossing; otherwise they never meet).
+  const order: PlayHand[] = anim.onTop(t) === 'left' ? ['right', 'left'] : ['left', 'right'];
+  for (const hand of order) {
     if (!show[hand]) continue;
     const pose = anim.pose(hand, t);
     if (!pose) continue;

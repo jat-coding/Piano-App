@@ -206,6 +206,8 @@ export class ExportFrameRenderer {
     for (let i = lowerBound(notes, t - 30); i < notes.length; i++) {
       const n = notes[i];
       if (n.startTime > t + ahead) break;
+      // The bar takes the colour of the hand that plays it (the hands may re-split a note).
+      const hand = this.hands ? this.hands.handOf(i) : n.hand;
       const end = n.startTime + n.duration;
       if (end < t) continue;
       const key = this.keyByMidi.get(n.midi);
@@ -225,17 +227,17 @@ export class ExportFrameRenderer {
       if (t >= n.startTime && t < end) {
         const sustained = t >= sus;
         const prev = active.get(n.midi);
-        if (!prev || prev.sustained) active.set(n.midi, { hand: n.hand, sustained });
+        if (!prev || prev.sustained) active.set(n.midi, { hand, sustained });
       }
       if (h <= 0) continue;
 
       const black = isBlackKey(n.midi);
       const w = black ? key.w : key.w * 0.86;
       const x = key.cx - w / 2;
-      const fill = noteColor(n.hand, black);
+      const fill = noteColor(hand, black);
       // The part of the bar after the finger lets go is drawn hollow (held by the pedal).
       const susY = sus < end ? Math.max(drawTop, Math.min(drawBottom, this.strikeY - (sus - t) * pps)) : drawTop;
-      if (susY > drawTop) this.drawHeldTail(n.hand, x, drawTop, w, susY - drawTop + (susY < drawBottom ? radius : 0), radius);
+      if (susY > drawTop) this.drawHeldTail(hand, x, drawTop, w, susY - drawTop + (susY < drawBottom ? radius : 0), radius);
       const sh = drawBottom - susY;
       if (sh > 0) {
         ctx.fillStyle = fill;

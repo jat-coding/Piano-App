@@ -43,6 +43,18 @@
 // keys/s (60 for the pedalled bass + chord, 130 for two-octave leaps 0.4 s apart). HARD for
 // every run: palm <= 150 keys/s (a jump faster than that is dropped by the fingering, see
 // MAX_DASH in fingering.ts). The rest is printed.
+// Phase 9, the hands never overlap (see overlap()):
+//  O1 every frame (60 fps), the two hands' silhouettes (palm, wrist stub, webs, fingers, as
+//     drawHands fills them, from handSilhouette) are rasterised at 1 px (36 px per white key)
+//     and intersected: overlap frames, the largest overlap (mm², hand scale) and the smallest
+//     gap between them in any row both occupy (mm). HARD, every case and every song: 0 overlap
+//     frames, except while a crossing is forced (the two hands' keys themselves cross, see
+//     wallAt in handPose.ts): those frames are listed, not gated. The faint motion-trail copies
+//     drawn during fast glides are counted separately (printed, not gated).
+//  O2 nearest-note finger: of the events where a hand's note nearest the other hand is within
+//     3 white keys of the other hand's nearest note (sounding then or within 0.4 s), how many
+//     play it with the finger on that side (left thumb on its highest note, right thumb on its
+//     lowest). Printed, not gated (a hand's own notes can forbid the thumb).
 import { build } from 'esbuild';
 import { readFileSync, rmSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -52,7 +64,7 @@ await build({
   stdin: {
     contents: `export { HandAnimator } from './src/hands/handPose';
 export * from './src/hands/skeleton';
-export { tipFrame } from './src/hands/drawHands';
+export { tipFrame, handSilhouette } from './src/hands/drawHands';
 export { keyU, isBlack } from './src/hands/fingering';
 export { mergeGhostReonsets } from './src/lib/reonsets';`,
     resolveDir: process.cwd(),
@@ -65,7 +77,7 @@ export { mergeGhostReonsets } from './src/lib/reonsets';`,
 });
 const S = await import(pathToFileURL(process.cwd() + '/' + out).href);
 rmSync(out);
-const { HandAnimator, solveSkeleton, tipFrame, FINGERS, LIM, DIP_RATIO, splayLimitEff, keyU, mergeGhostReonsets } = S;
+const { HandAnimator, solveSkeleton, tipFrame, handSilhouette, FINGERS, LIM, DIP_RATIO, splayLimitEff, keyU, mergeGhostReonsets } = S;
 
 const RAD = Math.PI / 180;
 const UNIT = 36; // px per white key, like a typical export
@@ -461,6 +473,173 @@ function motion(name, notes, { hard = false, vmax = 60 } = {}) {
 }
 
 /** Back-to-back same-key pieces (re-strikes within 25 ms of the previous piece's end). */
+// ---------- Phase 9: the two hands never overlap ----------
+
+/** Fill a set of polygons (canvas px) into a W×H mask whose cell (0,0) is at (X0, Y0); even-odd per polygon. */
+function fillPolys(polys, X0, Y0, W, H, mask) {
+  const xs = [];
+  for (const P of polys) {
+    const n = P.length;
+    let pyMin = Infinity;
+    let pyMax = -Infinity;
+    for (const p of P) (pyMin = Math.min(pyMin, p.y)), (pyMax = Math.max(pyMax, p.y));
+    const r0 = Math.max(0, Math.floor(pyMin - Y0));
+    const r1 = Math.min(H - 1, Math.ceil(pyMax - Y0));
+    for (let r = r0; r <= r1; r++) {
+      const y = Y0 + r + 0.5;
+      xs.length = 0;
+      for (let i = 0; i < n; i++) {
+        const a = P[i];
+        const b = P[(i + 1) % n];
+        if ((a.y <= y) !== (b.y <= y)) xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
+      }
+      xs.sort((p, q) => p - q);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const c0 = Math.max(0, Math.ceil(xs[k] - X0 - 0.5));
+        const c1 = Math.min(W - 1, Math.floor(xs[k + 1] - X0 - 0.5));
+        for (let c = c0; c <= c1; c++) mask[r * W + c] = 1;
+      }
+    }
+  }
+}
+
+function polysBox(polys) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const P of polys) for (const p of P) (x0 = Math.min(x0, p.x)), (x1 = Math.max(x1, p.x)), (y0 = Math.min(y0, p.y)), (y1 = Math.max(y1, p.y));
+  return { x0, y0, x1, y1 };
+}
+
+/**
+ * Overlap of the left hand's polygons with the right hand's: area in px², and the smallest
+ * clearance (px) in any row both occupy (right hand's leftmost pixel minus the left hand's
+ * rightmost; negative = they cross in that row).
+ */
+function handOverlap(left, right) {
+  const a = polysBox(left);
+  const b = polysBox(right);
+  const Y0 = Math.floor(Math.max(a.y0, b.y0));
+  const Y1 = Math.ceil(Math.min(a.y1, b.y1));
+  if (Y1 <= Y0) return { area: 0, clear: Infinity };
+  if (b.x0 - a.x1 > 40) return { area: 0, clear: b.x0 - a.x1 };
+  const X0 = Math.floor(Math.min(a.x0, b.x0));
+  const W = Math.ceil(Math.max(a.x1, b.x1)) - X0 + 1;
+  const H = Y1 - Y0;
+  const mA = new Uint8Array(W * H);
+  const mB = new Uint8Array(W * H);
+  fillPolys(left, X0, Y0, W, H, mA);
+  fillPolys(right, X0, Y0, W, H, mB);
+  let area = 0;
+  let clear = Infinity;
+  for (let r = 0; r < H; r++) {
+    let la = -1;
+    let rb = -1;
+    for (let c = 0; c < W; c++) {
+      const i = r * W + c;
+      if (mA[i]) {
+        la = c;
+        if (mB[i]) area++;
+      }
+      if (mB[i] && rb < 0) rb = c;
+    }
+    if (la >= 0 && rb >= 0) clear = Math.min(clear, rb - la - 1);
+  }
+  return { area, clear };
+}
+
+/** O2: of a hand's events near the other hand, the share whose nearest note is played by the thumb. */
+function nearestFinger(anim, notes) {
+  const res = { left: [0, 0], right: [0, 0] };
+  const fin = anim.fingering;
+  for (const hand of ['left', 'right']) {
+    const other = hand === 'left' ? 'right' : 'left';
+    const otherNotes = notes.map((n, i) => i).filter((i) => fin.perNote[i].hand === other && fin.perNote[i].finger);
+    for (const e of fin.events[hand]) {
+      const inner = hand === 'left' ? e.notes.length - 1 : 0;
+      if (!e.fingers[inner]) continue;
+      const u = keyU(notes[e.notes[inner]].midi);
+      let edge = NaN;
+      for (const i of otherNotes) {
+        const n = notes[i];
+        if (n.startTime > e.time + 0.4 || n.startTime < e.time - 0.6 || (n.startTime < e.time && n.startTime + n.duration < e.time)) continue;
+        const v = keyU(n.midi);
+        if (Number.isNaN(edge) || (hand === 'left' ? v < edge : v > edge)) edge = v;
+      }
+      if (Number.isNaN(edge) || Math.abs(edge - u) > 3) continue;
+      res[hand][1]++;
+      if (e.fingers[inner] === 1) res[hand][0]++;
+    }
+  }
+  return res;
+}
+
+const overlapRows = [];
+/**
+ * O1 + O2 for one run. Hard: no overlap frame outside a forced crossing. Returns the stats.
+ */
+function overlap(name, notes, { expectForced = false } = {}) {
+  const anim = new HandAnimator(notes);
+  const g = geometry(notes);
+  const end = Math.max(...notes.map((n) => n.startTime + n.duration)) + 0.5;
+  const k = (UNIT * 0.9) / 23.5; // px per mm at hand scale (HAND_SCALE 0.9)
+  const st = { frames: 0, over: 0, forced: 0, forcedOver: 0, maxArea: 0, maxT: 0, minClear: Infinity, near: 0, ghostOver: 0 };
+  const runs = [];
+  const forcedRuns = [];
+  let run = -1;
+  let frun = -1;
+  for (let i = 0; i * (1 / FPS) < end; i++) {
+    const t = i / FPS;
+    const L = handSilhouette(anim, 'left', t, g);
+    const R = handSilhouette(anim, 'right', t, g);
+    if (!L || !R) continue;
+    st.frames++;
+    const forced = anim.wallAt ? anim.wallAt(t).wallW < 1 : false;
+    if (forced) st.forced++;
+    if (forced && frun < 0) frun = t;
+    if (!forced && frun >= 0) forcedRuns.push(`${frun.toFixed(2)}-${(t - 1 / FPS).toFixed(2)}`), (frun = -1);
+    const { area, clear } = handOverlap(L.polys, R.polys);
+    st.minClear = Math.min(st.minClear, clear);
+    if (clear < 2 * k) st.near++;
+    const bad = area > 0 && !forced;
+    if (area > 0) {
+      if (forced) st.forcedOver++;
+      else st.over++;
+      if (area > st.maxArea) (st.maxArea = area), (st.maxT = t);
+    }
+    if (bad && run < 0) run = t;
+    if (!bad && run >= 0) runs.push(`${run.toFixed(2)}-${(t - 1 / FPS).toFixed(2)}`), (run = -1);
+    // Motion-trail copies (drawn faint during fast glides) against the other hand.
+    for (const [hand, other] of [['left', R], ['right', L]]) {
+      const p = anim.pose(hand, t);
+      if (!p || p.speed <= 10) continue;
+      for (const dt of [0.02, 0.04]) {
+        const gh = handSilhouette(anim, hand, t - dt, g);
+        if (gh && handOverlap(hand === 'left' ? gh.polys : other.polys, hand === 'left' ? other.polys : gh.polys).area > 0) {
+          st.ghostOver++;
+          break;
+        }
+      }
+    }
+  }
+  if (run >= 0) runs.push(`${run.toFixed(2)}-end`);
+  if (frun >= 0) forcedRuns.push(`${frun.toFixed(2)}-end`);
+  const nf = nearestFinger(anim, notes);
+  const pct = (a) => (a[1] ? `${a[0]}/${a[1]} (${((100 * a[0]) / a[1]).toFixed(0)}%)` : '0/0');
+  const ok = st.over === 0 && (!expectForced || st.forced > 0);
+  if (!ok) failed++;
+  const fin = anim.fingering;
+  console.log(
+    `${ok ? 'PASS' : 'FAIL'}: ${name}: hands overlap in ${st.over}/${st.frames} frames${runs.length ? ` (${runs.join(' ')})` : ''}; ` +
+      `forced crossing ${st.forced} frames${forcedRuns.length ? ` (${forcedRuns.join(' ')}, ${st.forcedOver} of them overlapping)` : ''}; ` +
+      `largest overlap ${(st.maxArea / k / k).toFixed(0)} mm² at ${st.maxT.toFixed(2)} s; smallest gap ${Number.isFinite(st.minClear) ? (st.minClear / k).toFixed(1) : '-'} mm (${st.near} frames under 2 mm)`,
+  );
+  console.log(
+    `    nearest-note finger (thumb on the note nearest the other hand, when within 3 keys): left ${pct(nf.left)}, right ${pct(nf.right)}; ` +
+      `trail copies touching the other hand ${st.ghostOver} frames; notes re-split to stop a crossing ${fin.uncrossed ?? '-'}`,
+  );
+  overlapRows.push({ name, ...st, nf, runs, forcedRuns });
+  return st;
+}
+
 function contiguousRepeats(notes) {
   const by = new Map();
   for (const n of notes) (by.get(n.midi) ?? by.set(n.midi, []).get(n.midi)).push(n);
@@ -560,6 +739,58 @@ checkSong('RH ring finger repeats, little finger idle', [
 // b. Leaps: two octaves and back, 0.4 s apart.
 motion('RH leaps (2 octaves, 0.4 s apart)', seq([60, 64, 67, 84, 88, 91, 60, 64, 67], 'right', 0.4, 0.3), { hard: true, vmax: 130 });
 
+// Phase 9 overlap cases.
+// a. His report (Gymnopédie ~22.5 s): left hand bass, then B3 + D4 under the pedal, right hand F#4
+//    a major third above the D4, then C#4 F#4 A4. The left thumb takes D4.
+{
+  const notes = [nt(43, 0.5, 'left', 2.5), nt(59, 1.4, 'left', 1.6), nt(62, 1.4, 'left', 1.6), nt(66, 1.35, 'right', 1.7)];
+  notes.push(nt(38, 3.2, 'left', 0.7), nt(61, 3.95, 'right', 1.6), nt(66, 3.95, 'right', 1.6), nt(69, 3.97, 'right', 0.3));
+  const st = overlap('his Gymnopedie moment (LH B3+D4, RH F#4)', notes);
+  const anim = new HandAnimator(notes);
+  const d4 = anim.fingering.perNote[2];
+  const fs4 = anim.fingering.perNote[3];
+  // F#4 is 2.5 white keys above D4: the right hand may use its thumb or index there (its thumb
+  // then rests 1.5 keys from the left thumb), never a longer finger that puts its thumb and
+  // palm over the left hand (phase 8 played it with the middle finger, thumb 0.6 key away).
+  const ok = d4.finger === 1 && fs4.finger <= 2;
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ...left thumb on D4 (${d4.hand} ${d4.finger}), right thumb or index on F#4 (${fs4.hand} ${fs4.finger})`);
+}
+// b. Close chords, a white key apart, back and forth.
+{
+  const notes = [];
+  for (let i = 0; i < 6; i++) {
+    const t = 0.5 + i * 0.6;
+    const up = i % 2;
+    for (const m of up ? [55, 59, 62] : [53, 57, 60]) notes.push(nt(m, t, 'left', 0.55));
+    for (const m of up ? [64, 67, 71] : [62, 65, 69]) notes.push(nt(m, t, 'right', 0.55));
+  }
+  overlap('chords a white key apart', notes);
+}
+// c. A waiting hand gets out of the way: the left hand runs up to B4 while the right hand
+//    waits, its first note C5 right after.
+overlap('left run up to the waiting right hand', [...seq([60, 62, 64, 65, 67, 69, 71], 'left', 0.2, 0.18), nt(72, 2.0, 'right', 0.5), nt(76, 2.4, 'right', 0.5), nt(48, 0.3, 'left', 0.2)]);
+// d. A split mistake: the left hand given a note above the right hand's (both struck together).
+{
+  const notes = [nt(48, 0.5, 'left', 0.8), nt(67, 0.5, 'left', 0.8), nt(64, 0.5, 'right', 0.8), nt(72, 1.4, 'right', 0.5), nt(50, 1.4, 'left', 0.5)];
+  overlap('split mistake (left G4 over right E4)', notes);
+  const anim = new HandAnimator(notes);
+  const ok = anim.fingering.perNote[1].hand === 'right' && anim.fingering.uncrossed === 1;
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ...G4 re-split to the right hand (${anim.fingering.perNote[1].hand}, ${anim.fingering.uncrossed} note moved)`);
+}
+// e. A crossing that can't be undone: the right hand holds a wide chord while the left hand
+//    plays a note above it (no hand can take it). Allowed, listed, crossing hand drawn on top.
+{
+  const notes = [nt(36, 0.4, 'left', 0.3), ...[60, 64, 67, 72].map((m) => nt(m, 0.5, 'right', 2)), nt(79, 1.2, 'left', 0.4), nt(36, 2.2, 'left', 0.5)];
+  const st = overlap('forced crossing (LH G5 over a held RH chord)', notes, { expectForced: true });
+  const anim = new HandAnimator(notes);
+  const top = anim.onTop?.(1.25);
+  const ok = top === 'left';
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ...the crossing hand is drawn on top at 1.25 s (${top})`);
+}
+
 // Real songs. Transcribed songs saved before phase 8 get the re-onset cleanup on load in the
 // app (library.ts), so they are checked the same way; --raw checks the notes as stored.
 const raw = process.argv.includes('--raw');
@@ -574,6 +805,7 @@ for (const file of process.argv.slice(2).filter((a) => a !== '--raw')) {
   // offRate was 1% in phase 6; raised to 1.5% in phase 7 (the reel went from 0.7% to 1.35%: a few
   // over-stretched transcribed chords where the flatter, more curled phase-7 fingers fall short).
   checkSong(file.split('/').pop(), song.notes, { offRate: 0.015, jumpRate: 0.005, smoothRate: 0.005, real: true });
+  overlap(file.split('/').pop(), song.notes);
 }
 
 {

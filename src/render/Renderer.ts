@@ -356,11 +356,13 @@ export class Renderer {
 
       const end = n.startTime + n.duration;
       const sus = hands ? hands.sustainFrom(i) : Infinity;
+      // The bar takes the colour of the hand that plays it (the hands may re-split a note).
+      const hand = hands ? hands.handOf(i) : n.hand;
       // Note is being played when the strike line is within its span.
       if (currentTime >= n.startTime && currentTime <= end) {
         const sustained = currentTime >= sus;
         const prev = active.get(n.midi);
-        if (!prev || prev.sustained) active.set(n.midi, { hand: n.hand, sustained });
+        if (!prev || prev.sustained) active.set(n.midi, { hand, sustained });
       }
 
       const black = isBlackKey(n.midi);
@@ -372,7 +374,7 @@ export class Renderer {
       // Hollow from where the finger lets go (the pedal holds the rest).
       const susY = sus < end ? Math.max(drawTop, Math.min(drawBottom, this.strikeY - (sus - currentTime) * pps)) : drawTop;
       if (susY > drawTop) {
-        const rgb = handRgb(n.hand);
+        const rgb = handRgb(hand);
         ctx.fillStyle = `rgba(${rgb},0.2)`;
         this.roundRect(x, drawTop, w, susY - drawTop, 5);
         ctx.fill();
@@ -384,7 +386,7 @@ export class Renderer {
       const drawH = drawBottom - susY;
       if (drawH <= 0) continue;
 
-      const fill = noteColor(n.hand, black);
+      const fill = noteColor(hand, black);
       if (this.opts.glow) {
         ctx.shadowColor = fill;
         ctx.shadowBlur = 5;

@@ -69,6 +69,13 @@ export interface HandPose {
    * fingers follow one after another (15-45 ms apart, leading side first), not as a block.
    */
   lagStyle: PassageStyle[];
+  /**
+   * The line between the two hands (white keys, keyU): this hand stays on its side of it
+   * (the left hand to the left), palm and fingers, with a small gap. NaN with one hand.
+   */
+  wall: number;
+  /** How firmly the wall holds, 0..1: fades out only when the hands' keys truly cross. */
+  wallW: number;
 }
 
 const NO_STYLE: PassageStyle = { scale: 0, arpeggio: 0, octave: 0, chord: 0, rotBias: 0, roll: 0, leapLift: 0 };
@@ -177,6 +184,28 @@ const REACH_NEAR_THUMB = 4;
 /** Fade between reaching and not, white keys. */
 const REACH_FADE = 1.5;
 const LAND_FREE = 0.06;
+/** A fingertip stays this far (white keys) from the line between the hands: its half-width plus a small gap. */
+export const SIDE_TIP = 0.33;
+/**
+ * Where the line between the hands goes: halfway between their innermost fingers, with a
+ * finger that isn't on (or heading for) a key counted this many white keys further back,
+ * so the hand that is playing keeps its keys and an idle or travelling hand makes way.
+ */
+const IDLE_YIELD = 3;
+/** The wall fades out over this much crossing (white keys) between the hands' innermost keys. */
+const CROSS_FADE = 0.3;
+/**
+ * A hand makes way ahead of time, easing out of the other hand's path: a line that is
+ * coming dt seconds from now pulls only as far as it lies more than WALL_SPEED·dt +
+ * WALL_ACCEL·dt²/2 white keys inside the current one. Looks up to WALL_AHEAD seconds ahead,
+ * sampled every WALL_STEP seconds on a fixed grid (frames share the samples); a sample
+ * entering the window fades in over WALL_FADE.
+ */
+const WALL_SPEED = 4;
+const WALL_ACCEL = 30;
+const WALL_AHEAD = 0.6;
+const WALL_STEP = 0.05;
+const WALL_FADE = 0.15;
 const SPACING = 0.95; // a free finger's distance from its neighbour, white keys
 /** Thumb to little finger never wider than this (white keys): an octave plus a little. */
 const MAX_HAND_U = 7.3;
@@ -330,6 +359,43 @@ function glideWindow(a: KeyPose, b: KeyPose): { start: number; arrive: number; d
   return { start, arrive, dist };
 }
 
+interface RawPose {
+  fingers: FingerPose[];
+  anchored: boolean[];
+  hold: number[];
+  g: { u: number[]; depth: number[]; speed: number; dist: number; x: number; dir: number };
+}
+
+/**
+ * Keep a hand's fingertips on its side of the line between the hands (SIDE_TIP short of
+ * it). A hand that isn't playing moves over as a whole, out of the way; a playing hand's
+ * free fingers fold in. Fingers on keys never move (if one is past the line the keys
+ * themselves cross: the wall has faded out by then, see wallAt). `hold` is how firmly
+ * each finger is tied to its key (0..1, eased).
+ */
+function keepSide(fingers: FingerPose[], hold: number[], hand: PlayHand, wall: number, w: number): void {
+  const s = hand === 'left' ? 1 : -1; // + = toward the other hand
+  const limit = s * (wall - s * SIDE_TIP);
+  let over = 0;
+  let busy = 0;
+  for (let f = 1; f <= 5; f++) {
+    over = Math.max(over, s * fingers[f].u - limit);
+    busy = Math.max(busy, fingers[f].press);
+  }
+  // A hand with no key down steps back whole (keeps its shape); one holding a key only
+  // tucks its free fingers.
+  const back = Math.max(0, over) * (1 - busy) * w;
+  for (let f = 1; f <= 5; f++) {
+    // A finger tied to its key (landing, holding, just letting go) stays with it; the hold
+    // eases in and out, so a finger let go past the line glides back instead of jumping.
+    const free = 1 - hold[f];
+    if (free <= 0) continue;
+    let v = s * fingers[f].u - back * free;
+    v -= Math.max(0, v - limit) * w * free;
+    fingers[f].u = s * v;
+  }
+}
+
 export class HandAnimator {
   readonly fingering: FingeringResult;
   private keys: Record<PlayHand, KeyPose[]> = { left: [], right: [] };
@@ -445,6 +511,27 @@ export class HandAnimator {
     return st;
   }
 
+  /** The hand that plays note i (bars take its colour): the split's, unless the fingering moved it. */
+  handOf(i: number): PlayHand {
+    return this.fingering.perNote[i].hand;
+  }
+
+  /**
+   * Which hand is drawn on top at t. Apart, it doesn't matter (they never meet). When a
+   * passage truly forces a crossing (see wallAt), the hand that crosses goes over: the one
+   * that struck most recently, since it is the one reaching across.
+   */
+  onTop(t: number): PlayHand {
+    const { wallW } = this.wallAt(t);
+    if (wallW >= 1) return 'right';
+    const last = (h: PlayHand) => {
+      const ks = this.keys[h];
+      const i = lowerBound(ks, t + 0.2, 'time');
+      return i > 0 ? ks[i - 1].time : -Infinity;
+    };
+    return last('left') > last('right') ? 'left' : 'right';
+  }
+
   /** False for notes the hands ignore (e.g. off the visible keyboard). */
   inRange(note: number): boolean {
     return !this.skipped[note];
@@ -540,13 +627,115 @@ export class HandAnimator {
     return need * w;
   }
 
+  /**
+   * Both hands' fingers at t before they are kept apart, memoised for the last time asked
+   * (a frame asks for each hand, and each needs the other's).
+   */
+  private rawAt = { t: NaN, left: null as RawPose | null, right: null as RawPose | null };
+  private raw(hand: PlayHand, t: number): RawPose | null {
+    if (this.rawAt.t !== t) this.rawAt = { t, left: null, right: null };
+    return (this.rawAt[hand] ??= this.hasHand(hand) ? this.rawPose(hand, t) : null);
+  }
+
+  /**
+   * The line between the hands at t and how firmly it holds (see HandPose.wall): halfway
+   * between the left hand's innermost finger and the right hand's, where a finger that
+   * isn't on its way to a key counts IDLE_YIELD keys further back. Continuous in t, since
+   * every finger position and engagement is.
+   */
+  wallAt(t: number): { wall: number; wallW: number; a: number; b: number } {
+    const L = this.raw('left', t);
+    const R = this.raw('right', t);
+    if (!L || !R) return { wall: NaN, wallW: 0, a: NaN, b: NaN };
+    let a = -Infinity;
+    let b = Infinity;
+    for (let f = 1; f <= 5; f++) {
+      a = Math.max(a, L.fingers[f].u - (1 - L.fingers[f].engage) * IDLE_YIELD);
+      b = Math.min(b, R.fingers[f].u + (1 - R.fingers[f].engage) * IDLE_YIELD);
+    }
+    return { wall: (a + b) / 2, wallW: smooth((b - a) / CROSS_FADE), a, b };
+  }
+
+  private wallGrid = new Map<number, { wall: number; wallW: number; a: number; b: number }>();
+  private wallAtGrid(i: number): { wall: number; wallW: number; a: number; b: number } {
+    let w = this.wallGrid.get(i);
+    if (!w) {
+      if (this.wallGrid.size > 4000) this.wallGrid.clear();
+      // Through a scratch memo slot, so the per-frame one stays valid.
+      const keep = this.rawAt;
+      w = this.wallAt(i * WALL_STEP);
+      this.rawAt = keep;
+      this.wallGrid.set(i, w);
+    }
+    return w;
+  }
+
+  /**
+   * The line this hand keeps to at t: the line between the hands now, moved out of the way
+   * early enough for where the other hand is about to play in the next WALL_AHEAD s (its
+   * innermost finger that is on or heading for a key then, less SIDE_TIP, so this hand's
+   * fingertips stay clear of it), easing out of the way (see WALL_SPEED). The left hand's
+   * line is never right of the shared one and the right hand's never left of it, so the
+   * hands still can't meet.
+   */
+  wallFor(hand: PlayHand, t: number): { wall: number; wallW: number } {
+    const now = this.wallAt(t);
+    if (!now.wallW) return now;
+    const s = hand === 'left' ? 1 : -1;
+    let wall = now.wall;
+    const i0 = Math.floor(t / WALL_STEP) + 1;
+    for (let i = i0; i * WALL_STEP <= t + WALL_AHEAD; i++) {
+      const w = this.wallAtGrid(i);
+      if (!w.wallW) continue;
+      const dt = i * WALL_STEP - t;
+      // As a sample nears the end of the window its pull fades in, so nothing jumps when it enters.
+      const fade = smooth((t + WALL_AHEAD - i * WALL_STEP) / WALL_FADE);
+      const other = s > 0 ? w.b : w.a;
+      const cand = other - s * SIDE_TIP + s * (WALL_SPEED * dt + 0.5 * WALL_ACCEL * dt * dt);
+      if (s * (cand - wall) < 0) wall = lerp(wall, cand, fade * w.wallW);
+    }
+    // ...but never over this hand's own keys: a finger still holding its key keeps it, and
+    // the hand only makes way around it (a line through its own held key can't be met and
+    // would set the palm fighting itself).
+    const raw = this.raw(hand, t)!;
+    for (let f = 1; f <= 5; f++) {
+      const need = raw.fingers[f].u + s * SIDE_TIP;
+      const lim = need - s * (1 - raw.hold[f]) * IDLE_YIELD;
+      if (s * (lim - wall) > 0) wall = s * Math.min(s * lim, s * now.wall);
+    }
+    return { wall, wallW: now.wallW };
+  }
+
+
   pose(hand: PlayHand, t: number): HandPose | null {
-    if (!this.hasHand(hand)) return null;
+    const raw = this.raw(hand, t);
+    if (!raw) return null;
+    const { g, anchored, hold } = raw;
+    // Copies: the raw pose is shared with the other hand's wall.
+    const fingers = raw.fingers.map((fp) => ({ ...fp }));
+    const { wall, wallW } = this.wallFor(hand, t);
+    if (wallW > 0) keepSide(fingers, hold, hand, wall, wallW);
+    settle(fingers, anchored, hand === 'right' ? 1 : -1);
+    const style = this.style(hand, t, g);
+    // Which side leads: the side the hand travels toward (screen right = higher u).
+    const dirHand = hand === 'right' ? 1 : -1;
+    const lead = g.dir * dirHand >= 0 ? 5 : 2;
+    const lagStyle: PassageStyle[] = [style];
+    for (let f = 1; f <= 5; f++) {
+      const dt = f === 1 ? 0 : STAGGER * Math.abs(f - lead);
+      lagStyle.push(dt ? this.style(hand, t - dt, g) : style);
+    }
+    return { hand, fingers, speed: g.speed, glideDist: g.dist, style, t, lagStyle, wall, wallW };
+  }
+
+  private rawPose(hand: PlayHand, t: number): RawPose {
     const g = this.glide(hand, t);
     const shift = this.parkShift(hand, t, g.u);
     const fingers: FingerPose[] = [{ u: 0, depth: 0, press: 0, engage: 0, lift: 0, pressLag: 0, liftLag: 0, black: 0 }];
     // Fingers on a key right now (landing or holding): those never move below.
     const anchored = [false, false, false, false, false, false];
+    // The same, eased (0..1): how firmly each finger is tied to its key, for keepSide.
+    const hold = [0, 0, 0, 0, 0, 0];
     // Keys held right now, and how firmly (fades as each finger lets go): a finger only
     // reaches ahead for its next key if that key is within a hand's reach of them.
     const held: { u: number; w: number }[] = [];
@@ -583,6 +772,7 @@ export class HandAnimator {
         // ...and not in the last moment before landing: the finger is going there regardless.
         far *= 1 - smooth((t - (land - LAND_FREE)) / LAND_FREE);
         const ramp = smooth((t - (land - lead)) / lead) * (1 - far);
+        hold[f] = smooth((t - (land - LAND_FREE)) / LAND_FREE);
         // A finger reaches ahead only as far as it comfortably can from where the hand has it
         // now (REACH_NEAR; the thumb further, passing under is its job). The rest of the way
         // is the hand's glide. A finger stretching for a far key early would drag the palm
@@ -607,6 +797,7 @@ export class HandAnimator {
         u = lerp(u, p.u, w);
         depth = lerp(depth, p.depth, w);
         anchored[f] = t >= p.start - PRESS_IN && t <= p.end;
+        hold[f] = Math.max(hold[f], w);
         // The palm lets go of a released finger more slowly than the fingertip does,
         // so the hand settles instead of snapping.
         const e2 = 1 - smooth((t - p.end) / ENGAGE_RELEASE);
@@ -618,15 +809,6 @@ export class HandAnimator {
       fingers.push({ u, depth, press: now.press, engage, lift: now.lift, pressLag: lag.press, liftLag: lag.lift, black });
     }
     settle(fingers, anchored, hand === 'right' ? 1 : -1);
-    const style = this.style(hand, t, g);
-    // Which side leads: the side the hand travels toward (screen right = higher u).
-    const dirHand = hand === 'right' ? 1 : -1;
-    const lead = g.dir * dirHand >= 0 ? 5 : 2;
-    const lagStyle: PassageStyle[] = [style];
-    for (let f = 1; f <= 5; f++) {
-      const dt = f === 1 ? 0 : STAGGER * Math.abs(f - lead);
-      lagStyle.push(dt ? this.style(hand, t - dt, g) : style);
-    }
-    return { hand, fingers, speed: g.speed, glideDist: g.dist, style, t, lagStyle };
+    return { fingers, anchored, hold, g };
   }
 }
