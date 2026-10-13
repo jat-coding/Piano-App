@@ -261,6 +261,8 @@ export class Renderer {
       kbH: this.keyboardHeight,
       blackH: this.keyboardHeight * 0.62,
       pixelRatio: this.dpr,
+      // The control bar overlays the canvas below the hand room: the wrists fade out above it.
+      floorY: this.strikeY + this.keyboardHeight + this.handRoom,
     };
     drawHands(ctx, this.hands, currentTime, g, { left: this.opts.showLeft, right: this.opts.showRight });
   }

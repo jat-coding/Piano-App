@@ -1,5 +1,6 @@
 import type { NoteEvent } from '../types';
 import {
+  type HandEvent,
   assignFingering,
   isBlack,
   keyU,
@@ -26,6 +27,30 @@ export interface FingerPose {
    * so the skeleton blends smoothly between the two.
    */
   engage: number;
+  /** Preparation lift before a strike, 0..1 (already scaled down for fast passages). */
+  lift: number;
+  /** press and lift 20 ms ago: what an idle neighbour finger follows (finger coupling). */
+  pressLag: number;
+  liftLag: number;
+  /** The key this finger is on or heading for is black (0..1, eased). */
+  black: number;
+}
+
+/**
+ * The hand's shape for the passage it is playing (see detectPassages), eased in
+ * and out so it never jumps. All weights are 0..1.
+ */
+export interface PassageStyle {
+  scale: number;
+  arpeggio: number;
+  octave: number;
+  chord: number;
+  /** Fingertips lean away from the direction of travel, degrees (screen: + = toward screen-right). */
+  rotBias: number;
+  /** Forearm rotation, degrees (+ = rolled toward screen-right). */
+  roll: number;
+  /** Extra knuckle height for a leap's arc, mm (0 outside a leap). */
+  leapLift: number;
 }
 
 export interface HandPose {
@@ -34,7 +59,42 @@ export interface HandPose {
   fingers: FingerPose[];
   /** How fast the whole hand is gliding, white keys per second (for motion smoothing). */
   speed: number;
+  /** How far the current glide goes, white keys (0 when the hand is not gliding). */
+  glideDist: number;
+  style: PassageStyle;
+  /** Song time of this pose (for deterministic idle micro-motion). */
+  t: number;
+  /**
+   * Per finger (1..5), the shape weights a few ms late: when the hand changes shape the
+   * fingers follow one after another (15-45 ms apart, leading side first), not as a block.
+   */
+  lagStyle: PassageStyle[];
 }
+
+const NO_STYLE: PassageStyle = { scale: 0, arpeggio: 0, octave: 0, chord: 0, rotBias: 0, roll: 0, leapLift: 0 };
+
+type PassageKind = 'scale' | 'arpeggio' | 'octave' | 'chord';
+interface Passage {
+  kind: PassageKind;
+  t0: number;
+  t1: number;
+  /** Direction of travel along the keyboard: +1 up, -1 down (scales, arpeggios). */
+  dir: number;
+  /** Notes per second in the passage. */
+  rate: number;
+}
+const EASE_IN = 0.15;
+const EASE_OUT = 0.25;
+/** Lift before a strike: starts this long before the onset. */
+const PREP = 0.12;
+/** Fingers change shape one after another, this far apart (s). */
+const STAGGER = 0.03;
+/** Neighbour fingers follow a moving finger this much later. */
+const COUPLE_LAG = 0.02;
+/** A glide this long (white keys) is a leap: the hand arcs up. */
+const LEAP_KEYS = 5;
+/** The thumb starts its tuck as soon as it lets go, but never earlier than this before landing. */
+const THUMB_EARLY = 0.6;
 
 interface KeyPose {
   time: number;
@@ -52,6 +112,56 @@ interface Press {
   u: number;
   depth: number;
   note: number;
+  /** Size of the preparation lift before this strike: smaller in fast passages. */
+  liftAmp: number;
+}
+
+/**
+ * Find the passages a pianist shapes the hand for, from one hand's events:
+ * scale runs (>= 4 single notes, steps of 1-2 semitones, one direction),
+ * arpeggios (>= 4 single notes, mostly steps of 3-5), octaves (two notes 12
+ * apart on thumb + little finger) and chords (3+ notes).
+ */
+function detectPassages(evs: HandEvent[], notes: NoteEvent[]): Passage[] {
+  const out: Passage[] = [];
+  const endOf = (e: HandEvent) => Math.max(...e.notes.map((ni) => notes[ni].startTime + notes[ni].duration));
+  for (const e of evs) {
+    const m = e.notes.map((ni) => notes[ni].midi);
+    if (m.length === 2 && Math.abs(m[1] - m[0]) === 12) {
+      const fs = new Set(e.fingers);
+      if (fs.has(1) && fs.has(5)) out.push({ kind: 'octave', t0: e.time, t1: endOf(e), dir: 0, rate: 0 });
+    } else if (m.length >= 3) out.push({ kind: 'chord', t0: e.time, t1: endOf(e), dir: 0, rate: 0 });
+  }
+  // Runs of single notes.
+  let i = 0;
+  while (i < evs.length) {
+    if (evs[i].notes.length !== 1) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    let dir = 0;
+    let steps: number[] = [];
+    while (j < evs.length && evs[j].notes.length === 1 && evs[j].time - evs[j - 1].time < 0.6) {
+      const d = notes[evs[j].notes[0]].midi - notes[evs[j - 1].notes[0]].midi;
+      if (!d || (dir && Math.sign(d) !== dir) || Math.abs(d) > 5) break;
+      dir = Math.sign(d);
+      steps.push(Math.abs(d));
+      j++;
+    }
+    if (j - i >= 4) {
+      const small = steps.filter((d) => d <= 2).length;
+      const wide = steps.filter((d) => d >= 3).length;
+      const kind: PassageKind | null = small === steps.length ? 'scale' : wide >= steps.length * 0.6 ? 'arpeggio' : null;
+      if (kind) {
+        const t0 = evs[i].time;
+        const t1 = evs[j - 1].time;
+        out.push({ kind, t0, t1: Math.max(t1, endOf(evs[j - 1])), dir, rate: (j - i - 1) / Math.max(0.05, t1 - t0) });
+      }
+      i = j - 1 > i ? j - 1 : j;
+    } else i = j > i + 1 ? j - 1 : i + 1;
+  }
+  return out.sort((a, b) => a.t0 - b.t0);
 }
 
 const LEAD = 0.035; // fingers arrive this long before the key goes down
@@ -61,6 +171,8 @@ const RELEASE_BLEND = 0.1; // a lifted finger rejoins the hand over this long
 const APPROACH = 0.18; // a finger starts reaching for its next key this long before landing
 const ENGAGE_RELEASE = 0.3;
 const REACH_AHEAD = 4.5; // ...but not for a key further than this (white keys) from one still held
+const HELD_FADE_IN = 0.1;
+const LAND_FREE = 0.06;
 const SPACING = 0.95; // a free finger's distance from its neighbour, white keys
 /** Thumb to little finger never wider than this (white keys): an octave plus a little. */
 const MAX_HAND_U = 7.3;
@@ -122,7 +234,18 @@ function keyPose(hand: PlayHand, time: number, played: Map<Finger, number>, hand
   return { time, u, depth, notes: new Set(), notBefore: -Infinity };
 }
 
-function lowerBound(arr: { time: number }[] | { start: number }[], t: number, key: 'time' | 'start'): number {
+function lowerBoundNum(arr: number[], t: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (arr[m] <= t) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
+}
+
+function lowerBound(arr: { time: number }[] | { start: number }[] | { t0: number }[], t: number, key: 'time' | 'start' | 't0'): number {
   let lo = 0;
   let hi = arr.length;
   while (lo < hi) {
@@ -194,6 +317,10 @@ export class HandAnimator {
   readonly fingering: FingeringResult;
   private keys: Record<PlayHand, KeyPose[]> = { left: [], right: [] };
   private presses: Record<PlayHand, Press[][]> = { left: [], right: [] };
+  private passages: Record<PlayHand, Passage[]> = { left: [], right: [] };
+  private maxPassage = 0;
+  /** Where each hand's notes start and end (song seconds), for parking an idle hand. */
+  private span: Record<PlayHand, [number, number]> = { left: [0, 0], right: [0, 0] };
   /** Per note: when its finger lets go of the key (the note's start if it never had one). */
   private fingerOff: Float64Array;
   private noteEnd: Float64Array;
@@ -228,6 +355,7 @@ export class HandAnimator {
             u: keyU(n.midi),
             depth: isBlack(n.midi) ? 1 : 0,
             note: ni,
+            liftAmp: 1,
           });
         });
         const kp = keyPose(hand, e.time, played, e.handU);
@@ -264,7 +392,48 @@ export class HandAnimator {
         }
       }
       this.presses[hand] = perFinger;
+      // Preparation lift: full at <= 4 notes/s, less above (fast fingers stay close to the keys).
+      const onsets = evs.map((e) => e.time);
+      for (let f = 1; f <= 5; f++) {
+        for (const p of perFinger[f]) {
+          const a = lowerBoundNum(onsets, p.start - 0.5);
+          const b = lowerBoundNum(onsets, p.start + 0.5);
+          p.liftAmp = Math.min(1, 4 / Math.max(1e-6, b - a));
+        }
+      }
+      this.passages[hand] = detectPassages(evs, notes);
+      for (const ps of this.passages[hand]) this.maxPassage = Math.max(this.maxPassage, ps.t1 - ps.t0);
+      if (ks.length) this.span[hand] = [ks[0].time, ks[ks.length - 1].time];
     }
+  }
+
+  /** The passage shape at t: every passage near t, eased in and out, strongest wins per kind. */
+  private style(hand: PlayHand, t: number, g: { dist: number; x: number; dir: number }): PassageStyle {
+    const st: PassageStyle = { ...NO_STYLE };
+    const list = this.passages[hand];
+    const hi = lowerBound(list, t + EASE_IN, 't0');
+    for (let i = hi - 1; i >= 0; i--) {
+      const ps = list[i];
+      if (ps.t0 < t - this.maxPassage - EASE_OUT - 1) break;
+      const w = smooth((t - (ps.t0 - EASE_IN)) / EASE_IN) * (1 - smooth((t - ps.t1) / EASE_OUT));
+      if (w <= 0) continue;
+      if (w > st[ps.kind]) {
+        st[ps.kind] = w;
+        if (ps.kind === 'scale') {
+          // Glissando motion: fingertips point slightly away from the travel, wrist leading.
+          st.rotBias = -ps.dir * 6 * Math.min(1, ps.rate / 6) * w;
+          // Fast scales cross with a small forearm flick instead of a deep tuck.
+          st.roll = ps.rate > 5 ? ps.dir * 5 * w : 0;
+        } else if (ps.kind === 'arpeggio') {
+          st.rotBias = -ps.dir * 4 * w;
+          // The forearm rotates toward the next note.
+          st.roll = ps.dir * 10 * w;
+        }
+      }
+    }
+    // A leap: the hand arcs up mid-flight.
+    if (g.dist > LEAP_KEYS && g.x > 0 && g.x < 1) st.leapLift = Math.min(20, 4 * g.dist) * Math.sin(Math.PI * g.x);
+    return st;
   }
 
   /** False for notes the hands ignore (e.g. off the visible keyboard). */
@@ -295,12 +464,12 @@ export class HandAnimator {
   }
 
   /** The glide between keyframes: where the hand is at t, before any held keys. */
-  private glide(hand: PlayHand, t: number): { u: number[]; depth: number[]; speed: number } {
+  private glide(hand: PlayHand, t: number): { u: number[]; depth: number[]; speed: number; dist: number; x: number; dir: number } {
     const ks = this.keys[hand];
     const i = lowerBound(ks, t, 'time'); // ks[i-1].time <= t < ks[i].time
-    if (i === 0) return { u: ks[0].u, depth: ks[0].depth, speed: 0 };
+    if (i === 0) return { u: ks[0].u, depth: ks[0].depth, speed: 0, dist: 0, x: 0, dir: 0 };
     const a = ks[i - 1];
-    if (i >= ks.length) return { u: a.u, depth: a.depth, speed: 0 };
+    if (i >= ks.length) return { u: a.u, depth: a.depth, speed: 0, dist: 0, x: 1, dir: 0 };
     const b = ks[i];
     const { start, arrive, dist } = glideWindow(a, b);
     const span = Math.max(1e-3, arrive - start);
@@ -314,13 +483,59 @@ export class HandAnimator {
     }
     // Peak speed of a smootherstep is 1.875× the average.
     const speed = x > 0 && x < 1 ? (dist / span) * 30 * x * x * (1 - x) * (1 - x) : 0;
-    return { u, depth, speed };
+    return { u, depth, speed, dist: x > 0 && x < 1 ? dist : 0, x, dir: Math.sign(b.u[3] - a.u[3]) };
+  }
+
+  /** Press (0..1) and preparation lift (0..1) of finger f at t. */
+  private pressLift(hand: PlayHand, f: number, t: number): { press: number; lift: number } {
+    const list = this.presses[hand][f];
+    const k = lowerBound(list, t + PRESS_IN, 'start') - 1;
+    let press = 0;
+    if (k >= 0) {
+      const p = list[k];
+      press = Math.max(0, Math.min(smooth((t - (p.start - PRESS_IN)) / PRESS_IN), 1 - smooth((t - p.end) / LIFT)));
+    }
+    let lift = 0;
+    if (k + 1 < list.length) {
+      const next = list[k + 1];
+      const x = (t - (next.start - PREP)) / (PREP - PRESS_IN);
+      if (x > 0 && x < 1) lift = Math.sin(Math.PI * x) * next.liftAmp * (1 - press);
+    }
+    return { press, lift };
+  }
+
+  /**
+   * A hand with nothing to play yet (or any more) steps aside if the other hand
+   * is playing where it would sit, then slides in for its first note.
+   */
+  private parkShift(hand: PlayHand, t: number, u: number[]): number {
+    const [first, last] = this.span[hand];
+    const w = Math.max(1 - smooth((t - (first - 0.9)) / 0.6), smooth((t - (last + 0.6)) / 0.6));
+    if (w <= 0) return 0;
+    const other: PlayHand = hand === 'right' ? 'left' : 'right';
+    if (!this.hasHand(other)) return 0;
+    const [oFirst, oLast] = this.span[other];
+    if (t < oFirst - 0.9 || t > oLast + 1.2) return 0;
+    const o = this.glide(other, t).u;
+    const MARGIN = 0.8;
+    let need = 0;
+    if (hand === 'right') {
+      const oHi = Math.max(o[1], o[2], o[3], o[4], o[5]);
+      const lo = Math.min(u[1], u[2], u[3], u[4], u[5]);
+      need = Math.max(0, oHi + MARGIN - lo);
+    } else {
+      const oLo = Math.min(o[1], o[2], o[3], o[4], o[5]);
+      const hi = Math.max(u[1], u[2], u[3], u[4], u[5]);
+      need = -Math.max(0, hi - (oLo - MARGIN));
+    }
+    return need * w;
   }
 
   pose(hand: PlayHand, t: number): HandPose | null {
     if (!this.hasHand(hand)) return null;
     const g = this.glide(hand, t);
-    const fingers: FingerPose[] = [{ u: 0, depth: 0, press: 0, engage: 0 }];
+    const shift = this.parkShift(hand, t, g.u);
+    const fingers: FingerPose[] = [{ u: 0, depth: 0, press: 0, engage: 0, lift: 0, pressLag: 0, liftLag: 0, black: 0 }];
     // Fingers on a key right now (landing or holding): those never move below.
     const anchored = [false, false, false, false, false, false];
     // Keys held right now, and how firmly (fades as each finger lets go): a finger only
@@ -329,31 +544,42 @@ export class HandAnimator {
     for (let f = 1; f <= 5; f++) {
       const list = this.presses[hand][f];
       const k = lowerBound(list, t + PRESS_IN, 'start') - 1;
-      if (k >= 0) held.push({ u: list[k].u, w: Math.max(0, 1 - smooth((t - list[k].end) / RELEASE_BLEND)) });
+      // A key counts as held from the moment its finger starts down (fading in, so a new
+      // far-away key doesn't yank other fingers back in one frame) until it lets go.
+      if (k >= 0) held.push({ u: list[k].u, w: Math.max(0, Math.min(smooth((t - (list[k].start - PRESS_IN)) / HELD_FADE_IN), 1 - smooth((t - list[k].end) / RELEASE_BLEND))) });
     }
     for (let f = 1; f <= 5; f++) {
-      let u = g.u[f];
+      let u = g.u[f] + shift;
       let depth = g.depth[f];
-      let press = 0;
       let engage = 0;
+      let black = 0;
       const list = this.presses[hand][f];
       const k = lowerBound(list, t + PRESS_IN, 'start') - 1; // latest press that has begun
       if (k + 1 < list.length) {
         // Reaching for the next key ahead of the hand: this is what makes a thumb
-        // pass under the hand while the other fingers still hold their keys.
+        // pass under the hand while the other fingers still hold their keys. The
+        // thumb starts as soon as it lets go of its previous key (pianists "lift
+        // the thumb early"), up to THUMB_EARLY before it lands.
         const next = list[k + 1];
         const land = next.start - PRESS_IN;
-        const lead = f === 1 ? APPROACH * 2 : APPROACH;
+        let lead = APPROACH;
+        // A tuck (the thumb's next key near its last one) starts as soon as it lets go; a
+        // longer thumb move keeps the usual lead.
+        if (f === 1) {
+          const tuck = k >= 0 && Math.abs(next.u - list[k].u) <= 3;
+          lead = tuck ? Math.max(0.06, land - Math.max(list[k].end, land - THUMB_EARLY)) : APPROACH * 2;
+        }
         let far = 0;
         for (const h of held) if (Math.abs(h.u - next.u) > REACH_AHEAD) far = Math.max(far, h.w);
+        // ...and not in the last moment before landing: the finger is going there regardless.
+        far *= 1 - smooth((t - (land - LAND_FREE)) / LAND_FREE);
         engage = smooth((t - (land - lead)) / lead) * (1 - far);
         u = lerp(u, next.u, engage);
         depth = lerp(depth, next.depth, engage);
+        black = next.depth * engage;
       }
       if (k >= 0) {
         const p = list[k];
-        // Down at the note's start, up at its end.
-        press = Math.min(smooth((t - (p.start - PRESS_IN)) / PRESS_IN), 1 - smooth((t - p.end) / LIFT));
         // While the key is held the fingertip stays on it (the poses around it
         // keep it there too, see the constructor); after, it rejoins the hand.
         const w = Math.max(0, 1 - smooth((t - p.end) / RELEASE_BLEND));
@@ -362,11 +588,24 @@ export class HandAnimator {
         anchored[f] = t >= p.start - PRESS_IN && t <= p.end;
         // The palm lets go of a released finger more slowly than the fingertip does,
         // so the hand settles instead of snapping.
-        engage = Math.max(engage, 1 - smooth((t - p.end) / ENGAGE_RELEASE));
+        const e2 = 1 - smooth((t - p.end) / ENGAGE_RELEASE);
+        if (e2 > engage) black = p.depth * e2;
+        engage = Math.max(engage, e2);
       }
-      fingers.push({ u, depth, press: Math.max(0, press), engage });
+      const now = this.pressLift(hand, f, t);
+      const lag = this.pressLift(hand, f, t - COUPLE_LAG);
+      fingers.push({ u, depth, press: now.press, engage, lift: now.lift, pressLag: lag.press, liftLag: lag.lift, black });
     }
     settle(fingers, anchored, hand === 'right' ? 1 : -1);
-    return { hand, fingers, speed: g.speed };
+    const style = this.style(hand, t, g);
+    // Which side leads: the side the hand travels toward (screen right = higher u).
+    const dirHand = hand === 'right' ? 1 : -1;
+    const lead = g.dir * dirHand >= 0 ? 5 : 2;
+    const lagStyle: PassageStyle[] = [style];
+    for (let f = 1; f <= 5; f++) {
+      const dt = f === 1 ? 0 : STAGGER * Math.abs(f - lead);
+      lagStyle.push(dt ? this.style(hand, t - dt, g) : style);
+    }
+    return { hand, fingers, speed: g.speed, glideDist: g.dist, style, t, lagStyle };
   }
 }
