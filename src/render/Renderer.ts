@@ -27,10 +27,9 @@ export const COLORS = {
 /** Hands never shrink below this many CSS px per white key (88 keys on a phone are narrow). */
 const MIN_HAND_UNIT = 12;
 
-/** A lit key: by which hand, and whether a finger is on it or only the pedal holds it. */
+/** A lit key (a finger is on it), and by which hand. */
 interface Lit {
   hand: Hand;
-  sustained: boolean;
 }
 
 function handRgb(hand: Hand): string {
@@ -343,8 +342,10 @@ export class Renderer {
       const n = notes[i];
       if (n.startTime > currentTime + visibleAhead) break; // nothing further is on screen
 
-      if (n.hand === 'left' && !this.opts.showLeft) continue;
-      if ((n.hand === 'right' || n.hand === 'unknown') && !this.opts.showRight) continue;
+      // Show/hide follows the hand that plays the note (the hands may re-split it).
+      const shown = hands ? hands.handOf(i) : n.hand;
+      if (shown === 'left' && !this.opts.showLeft) continue;
+      if ((shown === 'right' || shown === 'unknown') && !this.opts.showRight) continue;
 
       const key = this.keyByMidi.get(n.midi);
       if (!key) continue;
@@ -359,11 +360,11 @@ export class Renderer {
       // The bar takes the colour of the hand that plays it (the hands may re-split a note).
       const hand = hands ? hands.handOf(i) : n.hand;
       // Note is being played when the strike line is within its span.
-      if (currentTime >= n.startTime && currentTime <= end) {
-        const sustained = currentTime >= sus;
-        const prev = active.get(n.midi);
-        if (!prev || prev.sustained) active.set(n.midi, { hand, sustained });
-      }
+      // Only a key with its finger on it lights up. Once just the pedal holds the note the key
+      // looks unpressed (a lit key with no finger on it reads as the wrong hand); the bar's
+      // hollow tail shows that it still sounds.
+      const lit = currentTime >= n.startTime && currentTime <= (hands ? hands.litEnd(i) : end) && currentTime < sus;
+      if (lit && !active.has(n.midi)) active.set(n.midi, { hand });
 
       const black = isBlackKey(n.midi);
       const w = key.w * (black ? 1 : 0.9);
@@ -422,18 +423,6 @@ export class Renderer {
     ctx.stroke();
   }
 
-  /** A key only the pedal is holding (no finger on it): a dim wash and an outline in the hand colour. */
-  private drawHeldKey(hand: Hand, x: number, y: number, w: number, h: number, wash: number): void {
-    const { ctx } = this;
-    const rgb = handRgb(hand);
-    ctx.fillStyle = `rgba(${rgb},${wash})`;
-    ctx.fillRect(x, y, w, h);
-    const lw = Math.max(1.5, w * 0.12);
-    ctx.strokeStyle = `rgba(${rgb},0.95)`;
-    ctx.lineWidth = lw;
-    ctx.strokeRect(x + lw / 2 + 0.5, y + lw / 2 + 3, w - lw - 1, h - lw - 4);
-  }
-
   private drawKeyboard(active: Map<number, Lit>): void {
     const { ctx, cssW, strikeY, keyboardHeight } = this;
     const now = performance.now();
@@ -442,7 +431,7 @@ export class Renderer {
     for (const key of this.keys) {
       if (key.black) continue;
       const lit = active.get(key.midi);
-      const hand = lit && !lit.sustained ? lit.hand : undefined;
+      const hand = lit?.hand;
       const flashed = (this.flashes.get(key.midi) ?? 0) > now;
       if (hand) {
         ctx.fillStyle = noteColor(hand, false);
@@ -456,7 +445,6 @@ export class Renderer {
         g.addColorStop(1, COLORS.whiteKeyLo);
         ctx.fillStyle = g;
         ctx.fillRect(key.x, strikeY, key.w, keyboardHeight);
-        if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, keyboardHeight, 0.38);
       }
       ctx.strokeStyle = COLORS.keyBorder;
       ctx.lineWidth = 1;
@@ -473,13 +461,12 @@ export class Renderer {
     for (const key of this.keys) {
       if (!key.black) continue;
       const lit = active.get(key.midi);
-      const hand = lit && !lit.sustained ? lit.hand : undefined;
+      const hand = lit?.hand;
       const flashed = (this.flashes.get(key.midi) ?? 0) > now;
       ctx.fillStyle = hand ? noteColor(hand, true) : flashed ? COLORS.press : COLORS.blackKey;
       this.roundRect(key.x, strikeY, key.w, blackH, 3);
       ctx.fill();
-      if (lit?.sustained && !flashed) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, blackH, 0.5);
-      else if (!hand && !flashed) {
+      if (!hand && !flashed) {
         ctx.fillStyle = COLORS.blackKeySheen;
         this.roundRect(key.x + 1, strikeY + 1, key.w - 2, blackH * 0.18, 2);
         ctx.fill();

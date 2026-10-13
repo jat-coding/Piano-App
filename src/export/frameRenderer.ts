@@ -19,10 +19,9 @@ const IVORY = '#f1e7d0';
 /** Hands never shrink below this many px per white key, however wide the zoom. */
 const MIN_HAND_UNIT = 34;
 
-/** A key that is lit: by which hand, and whether a finger is on it or the pedal holds it. */
+/** A key that is lit (a finger is on it), and by which hand. */
 interface Lit {
   hand: Hand;
-  sustained: boolean;
 }
 
 export function handRgb(hand: Hand): string {
@@ -224,11 +223,10 @@ export class ExportFrameRenderer {
       }
       // From `sus` on, no finger is on the key: the pedal holds the note.
       const sus = this.hands ? this.hands.sustainFrom(i) : Infinity;
-      if (t >= n.startTime && t < end) {
-        const sustained = t >= sus;
-        const prev = active.get(n.midi);
-        if (!prev || prev.sustained) active.set(n.midi, { hand, sustained });
-      }
+      // Only a key with its finger on it lights up. Once just the pedal holds the note the key
+      // looks unpressed (a lit key with no finger on it reads as the wrong hand); the bar's
+      // hollow tail shows that it still sounds.
+      if (t >= n.startTime && t < (this.hands ? this.hands.litEnd(i) : end) && t < sus && !active.has(n.midi)) active.set(n.midi, { hand });
       if (h <= 0) continue;
 
       const black = isBlackKey(n.midi);
@@ -307,14 +305,14 @@ export class ExportFrameRenderer {
 
   private drawStrike(active: Map<number, Lit>): void {
     const { ctx, strikeY } = this;
-    // Light rising off every held key, in the hand's colour (fainter once only the pedal holds it).
-    for (const [midi, { hand, sustained }] of active) {
+    // Light rising off every held key, in the hand's colour.
+    for (const [midi, { hand }] of active) {
       const key = this.keyByMidi.get(midi);
       if (!key) continue;
       const g = ctx.createLinearGradient(0, strikeY - 70, 0, strikeY);
       const c = handRgb(hand);
       g.addColorStop(0, `rgba(${c},0)`);
-      g.addColorStop(1, `rgba(${c},${sustained ? 0.2 : 0.45})`);
+      g.addColorStop(1, `rgba(${c},0.45)`);
       ctx.fillStyle = g;
       ctx.fillRect(key.cx - key.w, strikeY - 70, key.w * 2, 70);
     }
@@ -329,10 +327,9 @@ export class ExportFrameRenderer {
     for (const key of this.keys) {
       if (key.black) continue;
       const lit = active.get(key.midi);
-      const hand = lit && !lit.sustained ? lit.hand : undefined;
+      const hand = lit?.hand;
       ctx.fillStyle = hand ? noteColor(hand, false) : this.whiteKeyGrad;
       ctx.fillRect(key.x, strikeY, key.w, kbH);
-      if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, kbH, 0.38);
       ctx.strokeStyle = COLORS.keyBorder;
       ctx.lineWidth = 2;
       ctx.strokeRect(Math.round(key.x) + 1, strikeY, key.w, kbH);
@@ -354,12 +351,11 @@ export class ExportFrameRenderer {
     for (const key of this.keys) {
       if (!key.black) continue;
       const lit = active.get(key.midi);
-      const hand = lit && !lit.sustained ? lit.hand : undefined;
+      const hand = lit?.hand;
       ctx.fillStyle = hand ? noteColor(hand, true) : COLORS.blackKey;
       roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
       ctx.fill();
-      if (lit?.sustained) this.drawHeldKey(lit.hand, key.x, strikeY, key.w, blackH, 0.5);
-      else if (!hand) {
+      if (!hand) {
         ctx.fillStyle = 'rgba(216,190,120,0.14)';
         roundRect(ctx, key.x + 3, strikeY + 6, key.w - 6, blackH * 0.2, 3);
         ctx.fill();
@@ -369,18 +365,6 @@ export class ExportFrameRenderer {
       roundRect(ctx, key.x, strikeY, key.w, blackH, 5);
       ctx.stroke();
     }
-  }
-
-  /** A key the pedal is holding (no finger on it): a dim wash and an outline in the hand colour. */
-  private drawHeldKey(hand: Hand, x: number, y: number, w: number, h: number, wash: number): void {
-    const { ctx } = this;
-    const rgb = handRgb(hand);
-    ctx.fillStyle = `rgba(${rgb},${wash})`;
-    ctx.fillRect(x, y, w, h);
-    const lw = Math.max(3, w * 0.1);
-    ctx.strokeStyle = `rgba(${rgb},0.95)`;
-    ctx.lineWidth = lw;
-    ctx.strokeRect(x + lw / 2 + 1, y + lw / 2 + 4, w - lw - 2, h - lw - 6);
   }
 
   private drawFooter(): void {

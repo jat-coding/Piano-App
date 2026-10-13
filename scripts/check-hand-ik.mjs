@@ -49,8 +49,10 @@
 //     and intersected: overlap frames, the largest overlap (mm², hand scale) and the smallest
 //     gap between them in any row both occupy (mm). HARD, every case and every song: 0 overlap
 //     frames, except while a crossing is forced (the two hands' keys themselves cross, see
-//     wallAt in handPose.ts): those frames are listed, not gated. The faint motion-trail copies
-//     drawn during fast glides are counted separately (printed, not gated).
+//     wallAt in handPose.ts): those frames are listed, not gated.
+//     This is a model of the export (its own keyboard geometry, no off-keyboard notes skipped):
+//     phase 9 passed it while the sent video overlapped. The gate on the real picture is
+//     scripts/check-hands-export.mjs (phase 9b); keep both.
 //  O2 nearest-note finger: of the events where a hand's note nearest the other hand is within
 //     3 white keys of the other hand's nearest note (sounding then or within 0.4 s), how many
 //     play it with the finger on that side (left thumb on its highest note, right thumb on its
@@ -576,12 +578,12 @@ const overlapRows = [];
 /**
  * O1 + O2 for one run. Hard: no overlap frame outside a forced crossing. Returns the stats.
  */
-function overlap(name, notes, { expectForced = false } = {}) {
-  const anim = new HandAnimator(notes);
+function overlap(name, notes, { expectForced = false, fopts = {} } = {}) {
+  const anim = new HandAnimator(notes, fopts);
   const g = geometry(notes);
   const end = Math.max(...notes.map((n) => n.startTime + n.duration)) + 0.5;
   const k = (UNIT * 0.9) / 23.5; // px per mm at hand scale (HAND_SCALE 0.9)
-  const st = { frames: 0, over: 0, forced: 0, forcedOver: 0, maxArea: 0, maxT: 0, minClear: Infinity, near: 0, ghostOver: 0 };
+  const st = { frames: 0, over: 0, forced: 0, forcedOver: 0, maxArea: 0, maxT: 0, minClear: Infinity, near: 0 };
   const runs = [];
   const forcedRuns = [];
   let run = -1;
@@ -607,18 +609,6 @@ function overlap(name, notes, { expectForced = false } = {}) {
     }
     if (bad && run < 0) run = t;
     if (!bad && run >= 0) runs.push(`${run.toFixed(2)}-${(t - 1 / FPS).toFixed(2)}`), (run = -1);
-    // Motion-trail copies (drawn faint during fast glides) against the other hand.
-    for (const [hand, other] of [['left', R], ['right', L]]) {
-      const p = anim.pose(hand, t);
-      if (!p || p.speed <= 10) continue;
-      for (const dt of [0.02, 0.04]) {
-        const gh = handSilhouette(anim, hand, t - dt, g);
-        if (gh && handOverlap(hand === 'left' ? gh.polys : other.polys, hand === 'left' ? other.polys : gh.polys).area > 0) {
-          st.ghostOver++;
-          break;
-        }
-      }
-    }
   }
   if (run >= 0) runs.push(`${run.toFixed(2)}-end`);
   if (frun >= 0) forcedRuns.push(`${frun.toFixed(2)}-end`);
@@ -634,7 +624,7 @@ function overlap(name, notes, { expectForced = false } = {}) {
   );
   console.log(
     `    nearest-note finger (thumb on the note nearest the other hand, when within 3 keys): left ${pct(nf.left)}, right ${pct(nf.right)}; ` +
-      `trail copies touching the other hand ${st.ghostOver} frames; notes re-split to stop a crossing ${fin.uncrossed ?? '-'}`,
+      `notes re-split ${fin.uncrossed ?? '-'}`,
   );
   overlapRows.push({ name, ...st, nf, runs, forcedRuns });
   return st;
@@ -779,12 +769,19 @@ overlap('left run up to the waiting right hand', [...seq([60, 62, 64, 65, 67, 69
   if (!ok) failed++;
   console.log(`${ok ? 'PASS' : 'FAIL'}: ...G4 re-split to the right hand (${anim.fingering.perNote[1].hand}, ${anim.fingering.uncrossed} note moved)`);
 }
-// e. A crossing that can't be undone: the right hand holds a wide chord while the left hand
-//    plays a note above it (no hand can take it). Allowed, listed, crossing hand drawn on top.
+// e. The left hand given a note above a chord the right hand holds: since phase 9b the split
+//    never leaves a left-hand note right of a right-hand one, so G5 goes to the right hand.
+//    With the re-split off (uncross: false), the crossing is forced: allowed, listed, and the
+//    crossing hand is drawn on top.
 {
   const notes = [nt(36, 0.4, 'left', 0.3), ...[60, 64, 67, 72].map((m) => nt(m, 0.5, 'right', 2)), nt(79, 1.2, 'left', 0.4), nt(36, 2.2, 'left', 0.5)];
-  const st = overlap('forced crossing (LH G5 over a held RH chord)', notes, { expectForced: true });
-  const anim = new HandAnimator(notes);
+  overlap('LH G5 over a held RH chord', notes);
+  const split = new HandAnimator(notes);
+  const ok5 = split.fingering.perNote[5].hand === 'right';
+  if (!ok5) failed++;
+  console.log(`${ok5 ? 'PASS' : 'FAIL'}: ...G5 re-split to the right hand (${split.fingering.perNote[5].hand})`);
+  overlap('forced crossing (same, re-split off)', notes, { expectForced: true, fopts: { uncross: false } });
+  const anim = new HandAnimator(notes, { uncross: false });
   const top = anim.onTop?.(1.25);
   const ok = top === 'left';
   if (!ok) failed++;

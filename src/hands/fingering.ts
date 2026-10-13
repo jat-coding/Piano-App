@@ -1,4 +1,5 @@
 import type { NoteEvent } from '../types';
+import { crossesAt, resplit } from './splitLine';
 
 /**
  * Fingering engine: which finger of which hand plays each note.
@@ -53,8 +54,8 @@ export interface FingeringResult {
   /** Notes left without a finger because reaching them would need a jump no hand can make in time. */
   tooFast: number;
   /**
-   * Notes moved to the other hand because the split had the hands crossing (a left-hand
-   * note above a right-hand note sounding with it) and the other hand could take it.
+   * Notes moved to the other hand by resplit (splitLine.ts): the given split had a left-hand
+   * note right of a right-hand note close to it in time, or a hand reaching too far.
    */
   uncrossed: number;
 }
@@ -66,7 +67,7 @@ export interface FingeringOptions {
   moveOverflow?: boolean;
   /** Notes the hands should ignore (e.g. off the visible keyboard). They get no finger. */
   skip?: (index: number) => boolean;
-  /** Re-split notes that put the two hands across each other (default on; see uncross). */
+  /** Re-split so the hands never cross (default on; see resplit in splitLine.ts). */
   uncross?: boolean;
 }
 
@@ -108,7 +109,7 @@ const SPAN: Record<string, Span> = {
   '13': [-4, -2, 3, 7, 10, 10],
   '14': [-3, -1, 5, 9, 11, 11],
   '15': [-1, 1, 7, 10, 12, 12],
-  '23': [1, 1, 1, 2, 3, 4],
+  '23': [1, 1, 1, 2, 3, 3],
   '24': [1, 1, 3, 4, 5, 6],
   '25': [2, 2, 5, 6, 8, 9],
   '34': [1, 1, 1, 2, 2, 3],
@@ -443,7 +444,7 @@ export function assignFingering(notes: NoteEvent[], opts: FingeringOptions = {})
     .map((_, i) => i)
     .filter((i) => !skip?.(i))
     .sort((a, b) => notes[a].startTime - notes[b].startTime);
-  const uncrossed = opts.uncross === false ? 0 : uncross(notes, byStart, handOf, win);
+  const uncrossed = opts.uncross === false ? 0 : resplit(notes, byStart, handOf);
   for (let i = 0; i < notes.length; i++) perNote[i].hand = handOf[i];
 
   // Pass 1: find chords one hand can't span; hand their edge notes over if the
@@ -475,7 +476,9 @@ export function assignFingering(notes: NoteEvent[], opts: FingeringOptions = {})
         moveOverflow &&
         r > 0 &&
         !otherBusy(hand, e.time) &&
-        overflowCount(other, drop.map((i) => notes[i].midi).sort((a, b) => a - b)) === 0;
+        overflowCount(other, drop.map((i) => notes[i].midi).sort((a, b) => a - b)) === 0 &&
+        // ...and never onto the wrong side of the other hand's notes (see resplit).
+        drop.every((i) => !crossesAt(notes, byStart, handOf, i, other));
       for (const i of drop) {
         if (canMove) {
           handOf[i] = other;
@@ -539,86 +542,6 @@ function otherEdgeAt(notes: NoteEvent[], idx: number[], other: PlayHand, t: numb
     if (Number.isNaN(edge) || (other === 'right' ? u < edge : u > edge)) edge = u;
   }
   return edge;
-}
-
-/**
- * Undo hand-split mistakes that cross the hands: a left-hand note above a right-hand note
- * struck with it (or struck while that note is still being played) puts one hand across
- * the other. Move whichever of the two notes the other hand can take (it fits in that
- * hand's chord there), preferring the one nearer that hand's other notes. A crossing
- * neither hand can resolve is left alone: it is forced (and drawn with the crossing hand
- * on top). Returns how many notes moved.
- */
-function uncross(notes: NoteEvent[], byStart: number[], handOf: PlayHand[], win: number): number {
-  const TOGETHER = 0.3; // struck together or right after each other (s)
-  const NEAR_SEMI = 2;
-  // A near (uncrossed) note moves only if it is this many semitones nearer the other hand's notes.
-  const NEAR_PREF = 5;
-  const HELD = 0.6; // ...or the earlier note was struck at most this long before and still sounds
-  let moved = 0;
-  const chordAt = (hand: PlayHand, t: number, without: number): number[] => {
-    const out: number[] = [];
-    for (const i of byStart) {
-      if (i === without || handOf[i] !== hand) continue;
-      if (Math.abs(notes[i].startTime - t) <= win) out.push(notes[i].midi);
-    }
-    return out;
-  };
-  // Mean pitch of a hand's notes within ±1 s of t, without note `without`.
-  const centre = (hand: PlayHand, t: number, without: number): number => {
-    let s = 0;
-    let c = 0;
-    for (const i of byStart) {
-      if (i === without || handOf[i] !== hand) continue;
-      if (Math.abs(notes[i].startTime - t) <= 1) (s += notes[i].midi), c++;
-    }
-    return c ? s / c : NaN;
-  };
-  const fits = (hand: PlayHand, i: number): boolean => {
-    const chord = [...chordAt(hand, notes[i].startTime, i), notes[i].midi].sort((a, b) => a - b);
-    return chord.length <= 5 && statesFor(hand, [...new Set(chord)]).length > 0;
-  };
-  for (let pass = 0; pass < 3; pass++) {
-    let changed = false;
-    for (let a = 0; a < byStart.length; a++) {
-      const i = byStart[a];
-      for (let b = a + 1; b < byStart.length; b++) {
-        const j = byStart[b];
-        const ni = notes[i];
-        const nj = notes[j];
-        if (nj.startTime - ni.startTime > HELD) break;
-        if (handOf[i] === handOf[j] || ni.midi === nj.midi) continue;
-        const together = nj.startTime - ni.startTime <= TOGETHER || ni.startTime + ni.duration > nj.startTime + 0.05;
-        if (!together) continue;
-        const l = handOf[i] === 'left' ? i : j;
-        const r = l === i ? j : i;
-        const crossed = notes[l].midi > notes[r].midi;
-        // Within a whole tone: not crossed, but the two hands would be on top of each other.
-        // Only then a note that sits with the other hand's notes, far from its own, moves.
-        if (!crossed && notes[l].midi < notes[r].midi - NEAR_SEMI) continue;
-        // Candidates: the left note to the right hand, or the right note to the left.
-        const cand: { n: number; to: PlayHand; d: number }[] = [];
-        for (const [n, to] of [[l, 'right'], [r, 'left']] as [number, PlayHand][]) {
-          if (!fits(to, n)) continue;
-          const c = centre(to, notes[n].startTime, n);
-          const d = Number.isNaN(c) ? 0 : Math.abs(notes[n].midi - c);
-          if (!crossed) {
-            const own = centre(handOf[n], notes[n].startTime, n);
-            // (A note alone in its hand around then has no own notes to stay near.)
-            if (Number.isNaN(c) || (!Number.isNaN(own) && d + NEAR_PREF > Math.abs(notes[n].midi - own))) continue;
-          }
-          cand.push({ n, to, d });
-        }
-        if (!cand.length) continue;
-        cand.sort((x, y) => x.d - y.d);
-        handOf[cand[0].n] = cand[0].to;
-        moved++;
-        changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-  return moved;
 }
 
 /**

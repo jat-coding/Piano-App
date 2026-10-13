@@ -495,7 +495,7 @@ function shadeHand(ctx: Ctx, sk: Skeleton, outlines: FingerOutline[]): void {
   }
 }
 
-function paintHand(ctx: Ctx, sk: Skeleton, shapes: Shape[], outlines: FingerOutline[], edgeW: number, detail = true): void {
+function paintHand(ctx: Ctx, sk: Skeleton, shapes: Shape[], outlines: FingerOutline[], edgeW: number): void {
   // Edge pass, then the body on top: the edge only survives on the outside of the union.
   ctx.lineJoin = 'round';
   ctx.strokeStyle = SKIN.edge;
@@ -523,13 +523,10 @@ function paintHand(ctx: Ctx, sk: Skeleton, shapes: Shape[], outlines: FingerOutl
   shapes[0].path(ctx);
   ctx.fill();
   // Light and shade, only where the hand is.
-  // (Not on the faint motion-trail copies of a fast glide: nobody sees it there.)
-  if (detail) {
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-atop';
-    shadeHand(ctx, sk, outlines);
-    ctx.restore();
-  }
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-atop';
+  shadeHand(ctx, sk, outlines);
+  ctx.restore();
   // The thumb shows through the palm when it passes under (the hand is translucent):
   // inside the palm it gets a shaded body and a clear outline.
   ctx.save();
@@ -644,7 +641,7 @@ function drawOne(
   g: HandGeometry,
   tf: TipFrame,
   alpha: number,
-  ghost = false,
+  shadow = true,
 ): void {
   const { sk, wristShift, wristRot, outlines, shapes } = handBody(anim, pose, t, tf);
   const edgeW = Math.max(0.7, tf.unit * 0.035);
@@ -671,7 +668,7 @@ function drawOne(
     ctx.rect(-1e5, -1e5, 2e5, g.floorY + 1e5);
     ctx.clip();
   }
-  if (!ghost) drawShadow(ctx, sk, wristShift, wristRot, alpha);
+  if (shadow) drawShadow(ctx, sk, wristShift, wristRot, alpha);
   const sc = scratchCanvas(cw, ch);
   const sctx = sc.getContext('2d') as Ctx;
   sctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -679,7 +676,7 @@ function drawOne(
   sctx.clearRect(0, 0, cw, ch);
   sctx.setTransform(pr, 0, 0, pr, -minX * pr, -minY * pr);
   // Paint opaque, then lay down translucent: overlaps stay one even tone.
-  paintHand(sctx, sk, shapes, outlines, edgeW, !ghost);
+  paintHand(sctx, sk, shapes, outlines, edgeW);
   // Lay it down, fading the wrist stub out toward the player: the band below the palm
   // goes down in horizontal slices of falling opacity (much cheaper than compositing
   // a gradient mask into the scratch canvas, which cost several ms a frame). Above the
@@ -708,8 +705,9 @@ function drawOne(
 }
 
 /**
- * Draw both hands at song time t. Fast glides get two faint trailing copies
- * (motion smoothing), still computed purely from t.
+ * Draw both hands at song time t. (Fast glides used to get two faint trailing copies; they
+ * read as an extra, blurred hand next to the other one, so there are none.)
+ * `shadow` = false leaves out the contact shadows (check-hands-export measures the hands alone).
  */
 export function drawHands(
   ctx: CanvasRenderingContext2D,
@@ -717,6 +715,7 @@ export function drawHands(
   t: number,
   g: HandGeometry,
   show: Record<PlayHand, boolean> = { left: true, right: true },
+  shadow = true,
 ): void {
   const tf = tipFrame(g);
   // The hand on top goes last (only matters for a forced crossing; otherwise they never meet).
@@ -725,12 +724,6 @@ export function drawHands(
     if (!show[hand]) continue;
     const pose = anim.pose(hand, t);
     if (!pose) continue;
-    if (pose.speed > 10) {
-      for (const [dt, a] of [[0.04, 0.1], [0.02, 0.17]] as const) {
-        const ghost = anim.pose(hand, t - dt);
-        if (ghost) drawOne(ctx, anim, ghost, t - dt, g, tf, a, true);
-      }
-    }
-    drawOne(ctx, anim, pose, t, g, tf, HAND_ALPHA);
+    drawOne(ctx, anim, pose, t, g, tf, HAND_ALPHA, shadow);
   }
 }

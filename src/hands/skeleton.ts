@@ -114,7 +114,7 @@ const PALM_EDGE: [number, number][] = [
   [-28, 8], [-9, 12], [10, 9], [28, 1],
 ];
 /** Gap kept between the hands, each side of the line, mm (on top of SIDE_TIP for fingertips). */
-const WALL_GAP = 2;
+const WALL_GAP = 6;
 /** The forearm follows the palm's rotation with this gain, so the wrist bends sideways only a little. */
 export const FOREARM_GAIN = 0.7;
 

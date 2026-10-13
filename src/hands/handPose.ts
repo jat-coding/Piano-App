@@ -551,8 +551,22 @@ export class HandAnimator {
   sustainFrom(i: number): number {
     if (this.skipped[i]) return Infinity;
     // A lit key counts as held by the pedal from the moment its finger starts lifting off.
+    // A note no finger plays is drawn the pedal way from its start (a lit key always has its finger).
+    if (!this.fingering.perNote[i].finger) return this.fingerOff[i];
     const off = this.fingerOff[i];
     return off <= this.noteEnd[i] - MIN_SUSTAIN_TAIL ? off : Infinity;
+  }
+
+  /**
+   * When note i's key stops being lit: the note's end, or the moment its finger leaves if
+   * that is within the last MIN_SUSTAIN_TAIL (too short to show as pedal-held, and the
+   * finger is already on its way to the next key: the key mustn't stay lit without it).
+   */
+  litEnd(i: number): number {
+    const end = this.noteEnd[i];
+    if (this.skipped[i] || !this.fingering.perNote[i].finger) return end;
+    const off = this.fingerOff[i];
+    return off < end && off > end - MIN_SUSTAIN_TAIL ? off : end;
   }
 
   hasHand(hand: PlayHand): boolean {
