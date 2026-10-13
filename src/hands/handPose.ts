@@ -102,8 +102,6 @@ interface KeyPose {
   depth: number[];
   /** Notes under a finger in this pose (struck now, or still held from before). */
   notes: Set<number>;
-  /** Don't start gliding here before this (set when notes of the previous pose still sound). */
-  notBefore: number;
 }
 
 interface Press {
@@ -172,6 +170,12 @@ const APPROACH = 0.18; // a finger starts reaching for its next key this long be
 const ENGAGE_RELEASE = 0.3;
 const REACH_AHEAD = 4.5; // ...but not for a key further than this (white keys) from one still held
 const HELD_FADE_IN = 0.1;
+/** A finger reaches ahead only for a key within this many white keys of where the hand holds it now... */
+const REACH_NEAR = 2;
+/** ...the thumb further: passing under the hand is its job. */
+const REACH_NEAR_THUMB = 4;
+/** Fade between reaching and not, white keys. */
+const REACH_FADE = 1.5;
 const LAND_FREE = 0.06;
 const SPACING = 0.95; // a free finger's distance from its neighbour, white keys
 /** Thumb to little finger never wider than this (white keys): an octave plus a little. */
@@ -231,7 +235,7 @@ function keyPose(hand: PlayHand, time: number, played: Map<Finger, number>, hand
       if (f > hi) depth[f] = depth[hi] * 0.4;
     }
   }
-  return { time, u, depth, notes: new Set(), notBefore: -Infinity };
+  return { time, u, depth, notes: new Set() };
 }
 
 function lowerBoundNum(arr: number[], t: number): number {
@@ -256,7 +260,10 @@ function lowerBound(arr: { time: number }[] | { start: number }[] | { t0: number
   return lo; // first index with value > t
 }
 
-const MIN_TRAVEL = 0.12;
+/** Glide time: GLIDE_MIN + GLIDE_PER_KEY per white key, at most GLIDE_MAX (s). */
+const GLIDE_MIN = 0.16;
+const GLIDE_PER_KEY = 0.045;
+const GLIDE_MAX = 0.7;
 
 /**
  * Make a pose anatomically plausible by moving only the free fingers: the long
@@ -296,20 +303,30 @@ function settle(fingers: FingerPose[], anchored: boolean[], dir: number): void {
   }
 }
 
-/** When the glide from keyframe a to b starts and lands. */
+/**
+ * How long a glide of `dist` white keys takes when there is time for it (s): long enough
+ * that the hand eases out and in instead of darting (an octave takes about half a second).
+ */
+function glideTime(dist: number): number {
+  return Math.min(GLIDE_MAX, GLIDE_MIN + GLIDE_PER_KEY * dist);
+}
+
+/**
+ * When the glide from keyframe a to b starts and lands. The hand stays put as long as it
+ * can and leaves just early enough to make an unhurried glide that still lands on time.
+ * Notes left behind don't hold it back: if they still sound, the pedal holds them and
+ * their fingers let go as the hand leaves (they used to delay the glide until they ended,
+ * which squeezed long leaps into a dash of a few frames).
+ */
 function glideWindow(a: KeyPose, b: KeyPose): { start: number; arrive: number; dist: number } {
   const gap = b.time - a.time;
   let dist = 0;
   for (let f = 1; f <= 5; f++) dist = Math.max(dist, Math.abs(b.u[f] - a.u[f]));
-  // Travel time grows with distance; start early enough to land just before the note.
-  const travel = Math.min(0.45, Math.max(0.12, 0.1 + 0.04 * dist));
   const arrive = b.time - Math.min(LEAD, gap * 0.15);
-  const hold = Math.min(0.08, gap * 0.3);
-  let start = Math.max(a.time + hold, arrive - travel);
-  if (start >= arrive) start = a.time + gap * 0.2; // too little time: a quick, eased jump
-  // Stay while the notes being left behind still sound, as long as the hand can
-  // still get there in time; if it can't, those fingers let go (the pedal holds them).
-  if (b.notBefore > start) start = Math.max(start, Math.min(b.notBefore, arrive - MIN_TRAVEL));
+  // The hand can't leave before the keys of `a` are struck (a beat on them for a short
+  // move; a leap may leave sooner, the pedal or the other fingers carry the sound).
+  const hold = Math.min(dist > LEAP_KEYS ? 0.05 : 0.08, gap * 0.25);
+  const start = Math.max(a.time + hold, arrive - glideTime(dist));
   return { start, arrive, dist };
 }
 
@@ -363,14 +380,6 @@ export class HandAnimator {
         return kp;
       });
       const ks = this.keys[hand];
-      // A glide waits for the notes it leaves behind to end (see glideWindow).
-      for (let k = 1; k < ks.length; k++) {
-        let last = -Infinity;
-        for (const ni of ks[k - 1].notes) {
-          if (!ks[k].notes.has(ni)) last = Math.max(last, Math.min(this.noteEnd[ni], this.fingering.perNote[ni].releaseBy));
-        }
-        ks[k].notBefore = last;
-      }
       const eventOf = new Map<number, number>();
       ks.forEach((kp, k) => kp.notes.forEach((ni) => eventOf.has(ni) || eventOf.set(ni, k)));
       for (let f = 1; f <= 5; f++) {
@@ -432,7 +441,7 @@ export class HandAnimator {
       }
     }
     // A leap: the hand arcs up mid-flight.
-    if (g.dist > LEAP_KEYS && g.x > 0 && g.x < 1) st.leapLift = Math.min(20, 4 * g.dist) * Math.sin(Math.PI * g.x);
+    if (g.dist > LEAP_KEYS && g.x > 0 && g.x < 1) st.leapLift = Math.min(18, 4 * g.dist) * Math.sin(Math.PI * g.x);
     return st;
   }
 
@@ -573,8 +582,20 @@ export class HandAnimator {
         for (const h of held) if (Math.abs(h.u - next.u) > REACH_AHEAD) far = Math.max(far, h.w);
         // ...and not in the last moment before landing: the finger is going there regardless.
         far *= 1 - smooth((t - (land - LAND_FREE)) / LAND_FREE);
-        engage = smooth((t - (land - lead)) / lead) * (1 - far);
-        u = lerp(u, next.u, engage);
+        const ramp = smooth((t - (land - lead)) / lead) * (1 - far);
+        // A finger reaches ahead only as far as it comfortably can from where the hand has it
+        // now (REACH_NEAR; the thumb further, passing under is its job). The rest of the way
+        // is the hand's glide. A finger stretching for a far key early would drag the palm
+        // back and forth on the way, and dropping the stretch as the hand comes near would
+        // snap it. Both the reach (saturating) and its pull on the palm are smooth in the
+        // distance, so nothing jumps between frames.
+        const base = g.u[f] + shift;
+        const near = f === 1 ? REACH_NEAR_THUMB : REACH_NEAR;
+        const d = next.u - base;
+        const ad = Math.abs(d);
+        const reach = ad <= near ? ad : near + REACH_FADE * Math.tanh((ad - near) / REACH_FADE);
+        u = base + Math.sign(d) * reach * ramp;
+        engage = ramp * (1 - smooth((ad - near) / (2 * REACH_FADE)));
         depth = lerp(depth, next.depth, engage);
         black = next.depth * engage;
       }

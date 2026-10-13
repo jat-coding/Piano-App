@@ -181,7 +181,10 @@ function check(name, got, want) {
   check('held C4 + E5 later: C4 released at E5', r.perNote[0].releaseBy, 0.5);
   const a = new HandAnimator(n);
   check('  ...C4 drawn as pedal-held at 1.0 s', a.sustained(0, 1.0), true);
-  check('  ...but not while its finger is on it (0.3 s)', a.sustained(0, 0.3), false);
+  check('  ...but not while its finger is on it (0.03 s)', a.sustained(0, 0.03), false);
+  // Phase 8: the hand doesn't wait for the ringing C4 and then dash; it leaves early for an
+  // unhurried leap (the pedal holds C4), so the finger is off well before E5.
+  check('  ...and its finger lets go as the hand leaves, early (< 0.2 s)', a.sustainFrom(0) < 0.2, true);
   const p = a.pose('right', 1.0);
   check('  ...no fingertip left stretched on C4', p.fingers.slice(1).every((f) => Math.abs(f.u - keyU(60)) > 1), true);
 }

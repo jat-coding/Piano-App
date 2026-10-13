@@ -28,6 +28,21 @@
 //  9. black keys are played with flatter fingers (MCP+PIP >= 10° below that finger's white-key mean)
 // Cases: 3. rest dome (projected reach / flat length), 10. octaves (2-4 curled, lifted),
 // 12. the thumb starts its tuck within 50 ms of letting go (slow scale), thumb-under.
+// Phase 8, motion (per hand, palm x in white keys at 60 fps; see motion()):
+//  M1 palm moves per minute (runs faster than 1 key/s that travel >= 0.25 key), max / p99 palm
+//     speed (keys/s) and acceleration (keys/s²), one-frame snaps (a step > 0.3 key with both
+//     neighbouring steps < 40% of it), palm path and "wasted" path per minute (path between two
+//     onsets minus the net move) and back-and-forth turns > 0.15 key between two onsets
+//  M2 fake re-presses: same key struck again within 25 ms of the previous piece's end
+//     (counted in the notes before and after the re-onset cleanup, src/lib/reonsets.ts)
+//  M3 motion while ringing: palm path while one of the hand's notes still sounds (finger or
+//     pedal) and its next onset is more than 0.75 s away (longer than any glide): the hand
+//     has nowhere to be, so it should be still
+// HARD for the hand-written motion cases: no snaps, under 0.15 key of drift while ringing (a
+// released hand settling into its rest), palm <= `vmax`
+// keys/s (60 for the pedalled bass + chord, 130 for two-octave leaps 0.4 s apart). HARD for
+// every run: palm <= 150 keys/s (a jump faster than that is dropped by the fingering, see
+// MAX_DASH in fingering.ts). The rest is printed.
 import { build } from 'esbuild';
 import { readFileSync, rmSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -38,7 +53,8 @@ await build({
     contents: `export { HandAnimator } from './src/hands/handPose';
 export * from './src/hands/skeleton';
 export { tipFrame } from './src/hands/drawHands';
-export { keyU, isBlack } from './src/hands/fingering';`,
+export { keyU, isBlack } from './src/hands/fingering';
+export { mergeGhostReonsets } from './src/lib/reonsets';`,
     resolveDir: process.cwd(),
     loader: 'ts',
   },
@@ -49,7 +65,7 @@ export { keyU, isBlack } from './src/hands/fingering';`,
 });
 const S = await import(pathToFileURL(process.cwd() + '/' + out).href);
 rmSync(out);
-const { HandAnimator, solveSkeleton, tipFrame, FINGERS, LIM, DIP_RATIO, splayLimitEff, keyU } = S;
+const { HandAnimator, solveSkeleton, tipFrame, FINGERS, LIM, DIP_RATIO, splayLimitEff, keyU, mergeGhostReonsets } = S;
 
 const RAD = Math.PI / 180;
 const UNIT = 36; // px per white key, like a typical export
@@ -352,6 +368,110 @@ function checkSong(name, notes, { offRate = 0, jumpRate = 0.005, smoothRate = 0.
   return { st, anim, tf };
 }
 
+
+/** Phase 8 motion statistics for one song (see the header, M1-M3). */
+function motion(name, notes, { hard = false, vmax = 60 } = {}) {
+  const anim = new HandAnimator(notes);
+  const tf = tipFrame(geometry(notes));
+  const end = Math.max(...notes.map((n) => n.startTime + n.duration)) + 0.5;
+  const minutes = end / 60;
+  const rows = [];
+  let ok = true;
+  for (const hand of ['left', 'right']) {
+    if (!anim.hasHand(hand)) continue;
+    const xs = [];
+    for (let i = 0; i * (1 / FPS) < end; i++) {
+      xs.push(solveSkeleton(anim.pose(hand, i / FPS), tf).palm.x / UNIT);
+    }
+    const v = xs.map((x, i) => (i ? (x - xs[i - 1]) * FPS : 0));
+    const a = v.map((x, i) => (i > 1 ? (x - v[i - 1]) * FPS : 0));
+    const sorted = (arr) => arr.map(Math.abs).sort((p, q) => p - q);
+    const vs = sorted(v);
+    const as = sorted(a);
+    let moves = 0;
+    let cur = null;
+    const runs = [];
+    for (let i = 1; i < xs.length; i++) {
+      if (Math.abs(v[i]) <= 1) continue;
+      if (cur && i - cur.e <= 6) cur.e = i;
+      else runs.push((cur = { s: i - 1, e: i }));
+    }
+    for (const r of runs) {
+      let path = 0;
+      for (let i = r.s + 1; i <= r.e; i++) path += Math.abs(xs[i] - xs[i - 1]);
+      if (path > 0.25) moves++;
+    }
+    let snaps = 0;
+    for (let i = 2; i < xs.length - 1; i++) {
+      const d = Math.abs(xs[i] - xs[i - 1]);
+      if (d > 0.3 && Math.abs(xs[i - 1] - xs[i - 2]) < 0.4 * d && Math.abs(xs[i + 1] - xs[i]) < 0.4 * d) snaps++;
+    }
+    const evT = anim.fingering.events[hand].map((e) => e.time);
+    let path = 0;
+    let wasted = 0;
+    let turns = 0;
+    for (let i = 1; i < xs.length; i++) path += Math.abs(xs[i] - xs[i - 1]);
+    for (let k = 0; k + 1 < evT.length; k++) {
+      const i0 = Math.ceil(evT[k] * FPS);
+      const i1 = Math.min(xs.length - 1, Math.floor(evT[k + 1] * FPS));
+      if (i1 <= i0) continue;
+      let p = 0;
+      let ld = 0;
+      let at = xs[i0];
+      for (let i = i0 + 1; i <= i1; i++) {
+        const d = xs[i] - xs[i - 1];
+        p += Math.abs(d);
+        if (Math.abs(d) > 0.003) {
+          if (ld && Math.sign(d) !== ld) {
+            if (Math.abs(xs[i] - at) > 0.15) turns++;
+            at = xs[i];
+          }
+          ld = Math.sign(d);
+        }
+      }
+      wasted += p - Math.abs(xs[i1] - xs[i0]);
+    }
+    // M3: ringing frames with the next onset of this hand more than 0.75 s away (longer than any glide).
+    const mine = notes.filter((_, i) => anim.fingering.perNote[i].hand === hand && anim.inRange(i));
+    let pedalFrames = 0;
+    let pedalPath = 0;
+    for (let i = 1; i < xs.length; i++) {
+      const t = i / FPS;
+      const k = evT.findIndex((x) => x > t);
+      if (k >= 0 && evT[k] - t < 0.75) continue;
+      if (!mine.some((n) => n.startTime < t && t < n.startTime + n.duration)) continue;
+      pedalFrames++;
+      pedalPath += Math.abs(xs[i] - xs[i - 1]);
+    }
+    const st = {
+      movesPerMin: moves / minutes, maxV: vs[vs.length - 1], p99V: vs[Math.floor(vs.length * 0.99)],
+      maxA: as[as.length - 1], p99A: as[Math.floor(as.length * 0.99)], snaps,
+      pathPerMin: path / minutes, wastedPerMin: wasted / minutes, turns, pedalS: pedalFrames / FPS, pedalPath,
+    };
+    if (st.maxV > 150) ok = false;
+    if (hard && (snaps || st.maxV > vmax || pedalPath > 0.15)) ok = false;
+    rows.push(
+      `${hand}: ${st.movesPerMin.toFixed(1)} palm moves/min, speed max ${st.maxV.toFixed(0)} p99 ${st.p99V.toFixed(0)} keys/s, ` +
+        `accel max ${st.maxA.toFixed(0)} p99 ${st.p99A.toFixed(0)} keys/s², ${snaps} one-frame snaps, path ${st.pathPerMin.toFixed(0)}/min ` +
+        `(wasted ${st.wastedPerMin.toFixed(1)}/min, ${turns} back-and-forth turns), ringing with nothing due ${st.pedalS.toFixed(1)} s, moved ${pedalPath.toFixed(2)} keys`,
+    );
+  }
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}: motion, ${name}${anim.fingering.tooFast ? ` (${anim.fingering.tooFast} notes too fast to reach, left to the pedal)` : ''}\n    ${rows.join('\n    ')}`);
+}
+
+/** Back-to-back same-key pieces (re-strikes within 25 ms of the previous piece's end). */
+function contiguousRepeats(notes) {
+  const by = new Map();
+  for (const n of notes) (by.get(n.midi) ?? by.set(n.midi, []).get(n.midi)).push(n);
+  let c = 0;
+  for (const l of by.values()) {
+    l.sort((p, q) => p.startTime - q.startTime);
+    for (let i = 1; i < l.length; i++) if (l[i].startTime - (l[i - 1].startTime + l[i - 1].duration) <= 0.025) c++;
+  }
+  return c;
+}
+
 const nt = (midi, startTime, hand = 'right', duration = 0.25) => ({ midi, startTime, duration, velocity: 0.8, hand });
 const seq = (midis, hand, step = 0.3, dur = 0.28, t0 = 0.5) => midis.map((m, i) => nt(m, t0 + i * step, hand, dur));
 
@@ -422,11 +542,35 @@ checkSong('RH ring finger repeats, little finger idle', [
   console.log(`${ok ? 'PASS' : 'FAIL'}: rest dome, top-down reach / flat length: ${rows.join(', ')}`);
 }
 
-// Real songs.
-for (const file of process.argv.slice(2)) {
+
+// Phase 8 motion cases.
+// a. Gymnopédie-style left hand under the pedal: bass, then a chord a tenth up, each ringing
+//    until the next bar. The hand must glide early and slowly (not wait for the ringing bass
+//    and dash), and stay still while only the pedal holds.
+{
+  const notes = [];
+  for (let bar = 0; bar < 4; bar++) {
+    const t = 0.5 + bar * 2.4;
+    const bass = bar % 2 ? 38 : 43;
+    notes.push(nt(bass, t, 'left', 2.4));
+    for (const m of bar % 2 ? [54, 57, 61] : [59, 62, 66]) notes.push(nt(m, t + 0.8, 'left', 1.6));
+  }
+  motion('LH bass + chord under the pedal', notes, { hard: true });
+}
+// b. Leaps: two octaves and back, 0.4 s apart.
+motion('RH leaps (2 octaves, 0.4 s apart)', seq([60, 64, 67, 84, 88, 91, 60, 64, 67], 'right', 0.4, 0.3), { hard: true, vmax: 130 });
+
+// Real songs. Transcribed songs saved before phase 8 get the re-onset cleanup on load in the
+// app (library.ts), so they are checked the same way; --raw checks the notes as stored.
+const raw = process.argv.includes('--raw');
+for (const file of process.argv.slice(2).filter((a) => a !== '--raw')) {
   const arr = JSON.parse(readFileSync(file, 'utf8'));
   const rec = Array.isArray(arr) ? arr[arr.length - 1] : arr;
-  const song = rec.song ?? rec;
+  const song = { ...(rec.song ?? rec) };
+  const before = contiguousRepeats(song.notes);
+  if (!raw && rec.kind !== 'midi') song.notes = mergeGhostReonsets(song.notes).notes;
+  console.log(`    ${file.split('/').pop()}: back-to-back re-presses of one key ${before} -> ${contiguousRepeats(song.notes)} after the re-onset cleanup (${song.notes.length} notes)`);
+  motion(file.split('/').pop(), song.notes);
   // offRate was 1% in phase 6; raised to 1.5% in phase 7 (the reel went from 0.7% to 1.35%: a few
   // over-stretched transcribed chords where the flatter, more curled phase-7 fingers fall short).
   checkSong(file.split('/').pop(), song.notes, { offRate: 0.015, jumpRate: 0.005, smoothRate: 0.005, real: true });

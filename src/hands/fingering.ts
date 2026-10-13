@@ -50,6 +50,8 @@ export interface FingeringResult {
   moved: number;
   /** Notes no hand could reach. */
   unreachable: number;
+  /** Notes left without a finger because reaching them would need a jump no hand can make in time. */
+  tooFast: number;
 }
 
 export interface FingeringOptions {
@@ -129,6 +131,22 @@ const W = {
 };
 
 const INFEASIBLE = 1e6;
+
+/**
+ * Fastest average hand shift between two struck events (white keys per second). Faster
+ * than this the hand would teleport on screen (an octave and a half in 0.1 s is a
+ * transcription artefact, not something a hand does): one of the two events is played
+ * without a finger instead (see dropDashes).
+ */
+const MAX_DASH = 50;
+
+/**
+ * A finger keeps holding an earlier key only while that key is about where the finger
+ * would be anyway (white keys from its natural spot over the new notes). Further away,
+ * holding it would pull the hand off its new position: the finger lets go and the pedal
+ * (or the recording) carries the sound.
+ */
+const HOLD_SLACK = 1.5;
 
 /** Signed distance for the ordered finger pair, in the right-hand sense. */
 function spanDist(hand: PlayHand, pa: number, pb: number): number {
@@ -389,6 +407,7 @@ export function assignFingering(notes: NoteEvent[], opts: FingeringOptions = {})
   // other hand has no onset nearby, otherwise they stay unreachable.
   const unreachable = new Set<number>();
   let moved = 0;
+  let tooFast = 0;
   const onsets: Record<PlayHand, number[]> = { left: [], right: [] };
   for (const i of byStart) onsets[handOf[i]].push(notes[i].startTime);
   const otherBusy = (hand: PlayHand, t: number): boolean => {
@@ -440,12 +459,36 @@ export function assignFingering(notes: NoteEvent[], opts: FingeringOptions = {})
       e.idx.forEach((ni, j) => (perNote[ni].finger = st.fingers[j]));
       events[hand].push({ time: e.time, notes: e.idx, fingers: st.fingers, handU: st.handU, held: [] });
     });
+    tooFast += dropDashes(events[hand], perNote);
     // Pass 3: which earlier notes stay under their fingers at each event, and
     // which must let go early because the hand moves on (pedal holds the sound).
     trackHeld(hand, events[hand], notes, perNote);
   }
 
-  return { perNote, events, moved, unreachable: unreachable.size };
+  return { perNote, events, moved, unreachable: unreachable.size, tooFast };
+}
+
+/**
+ * Remove events the hand can't get to in time (see MAX_DASH), keeping the path that
+ * moves least: of two events too far apart for the time between them, the one whose
+ * removal leaves the calmer path with its other neighbour goes. Its notes get no finger.
+ */
+function dropDashes(evs: HandEvent[], perNote: NoteFingering[]): number {
+  const speed = (a: HandEvent, b: HandEvent) => Math.abs(b.handU - a.handU) / Math.max(1e-3, b.time - a.time);
+  let dropped = 0;
+  for (let k = 1; k < evs.length; ) {
+    if (speed(evs[k - 1], evs[k]) <= MAX_DASH) {
+      k++;
+      continue;
+    }
+    const without = (j: number) => (j > 0 && j + 1 < evs.length ? speed(evs[j - 1], evs[j + 1]) : 0);
+    const j = without(k - 1) <= without(k) ? k - 1 : k;
+    for (const ni of evs[j].notes) perNote[ni].finger = null;
+    dropped += evs[j].notes.length;
+    evs.splice(j, 1);
+    k = Math.max(1, j);
+  }
+  return dropped;
 }
 
 /**
@@ -467,7 +510,8 @@ function trackHeld(hand: PlayHand, evs: HandEvent[], notes: NoteEvent[], perNote
     const used = new Set(e.fingers);
     let keep: Held[] = [];
     for (const h of held) {
-      if (used.has(h.finger) || pitches.includes(h.pitch)) release(h, e.time);
+      const natural = e.handU + restU(hand, h.finger);
+      if (used.has(h.finger) || pitches.includes(h.pitch) || Math.abs(keyU(h.pitch) - natural) > HOLD_SLACK) release(h, e.time);
       else keep.push(h);
     }
     // Everything under a finger at once must fit one hand.

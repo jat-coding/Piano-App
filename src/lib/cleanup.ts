@@ -2,6 +2,7 @@ import type { NoteEvent, Song } from '../types';
 import { MIN_MIDI, MAX_MIDI } from '../types';
 import type { RawNote } from './transcribe';
 import { splitAtPitch, splitHands } from './handSplit';
+import { mergeGhostReonsets } from './reonsets';
 
 export type Quantize = 'off' | '1/8' | '1/16';
 
@@ -33,22 +34,23 @@ export function rawToSong(name: string, raw: RawNote[], opts: BuildOptions): Son
   for (const r of raw) {
     const midi = Math.round(r.pitchMidi);
     if (midi < MIN_MIDI || midi > MAX_MIDI) continue;
-
-    let startTime = r.startTimeSeconds;
-    let duration = Math.max(r.durationSeconds, 0.04);
-
-    if (grid > 0) {
-      startTime = Math.round(startTime / grid) * grid;
-      duration = Math.max(grid, Math.round(duration / grid) * grid);
-    }
-
     notes.push({
       midi,
-      startTime,
-      duration,
+      startTime: r.startTimeSeconds,
+      duration: Math.max(r.durationSeconds, 0.04),
       velocity: Math.min(1, Math.max(0.05, r.amplitude)),
       hand: 'unknown',
     });
+  }
+
+  // One ringing note the model cut into back-to-back pieces is one key press (see reonsets.ts).
+  notes = mergeGhostReonsets(notes).notes;
+
+  if (grid > 0) {
+    for (const n of notes) {
+      n.startTime = Math.round(n.startTime / grid) * grid;
+      n.duration = Math.max(grid, Math.round(n.duration / grid) * grid);
+    }
   }
 
   notes.sort((a, b) => a.startTime - b.startTime || a.midi - b.midi);

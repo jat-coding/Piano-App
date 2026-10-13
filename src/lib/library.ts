@@ -1,4 +1,5 @@
 import type { Song, NoteEvent } from '../types';
+import { mergeGhostReonsets } from './reonsets';
 
 const DB_NAME = 'cascade';
 const STORE = 'songs';
@@ -108,7 +109,9 @@ export async function getSong(id: string): Promise<Song | null> {
     (s) => s.get(id) as IDBRequest<SavedSong | undefined>,
   );
   if (!rec) return null;
-  return { name: rec.name, notes: rec.notes, duration: rec.duration };
+  // Songs transcribed before the re-onset cleanup existed get it on load (a no-op for newer ones).
+  const notes = rec.kind === 'midi' ? rec.notes : mergeGhostReonsets(rec.notes).notes;
+  return { name: rec.name, notes, duration: rec.duration };
 }
 
 export async function deleteSong(id: string): Promise<void> {
