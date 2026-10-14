@@ -926,6 +926,14 @@ body,
   color: var(--muted);
   font-size: 12px;
 }
+.engine-note {
+  margin: -6px 0 0;
+  color: var(--sage);
+  font-size: 12px;
+}
+.engine-note.fallback {
+  color: var(--orange);
+}
 .cleanup-head .x {
   background: none;
   border: none;
@@ -1237,6 +1245,17 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.lib-engine {
+  color: var(--sage);
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.lib-engine.fallback {
+  color: var(--muted);
 }
 .lib-dur {
   color: var(--muted);

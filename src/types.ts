@@ -13,6 +13,8 @@ export interface Song {
   name: string;
   notes: NoteEvent[]; // sorted by startTime
   duration: number; // seconds, end of last note
+  /** Transcribed songs: which engine wrote the notes (absent on MIDI and older songs). */
+  engine?: 'transkun' | 'basic-pitch';
 }
 
 export const MIN_MIDI = 21; // A0

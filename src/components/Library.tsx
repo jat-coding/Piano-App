@@ -29,6 +29,14 @@ export function Library() {
                   <KindIcon size={18} />
                 </span>
                 <span className="lib-name">{s.name}</span>
+                {s.engine && (
+                  <span
+                    className={`lib-engine${s.engine === 'transkun' ? '' : ' fallback'}`}
+                    title={s.engine === 'transkun' ? 'Transcribed on the desktop (high accuracy)' : 'Transcribed on this device (less accurate)'}
+                  >
+                    {s.engine === 'transkun' ? 'Desktop' : 'On-device'}
+                  </span>
+                )}
                 <span className="lib-dur">{formatTime(s.duration)}</span>
               </button>
               <button

@@ -1,7 +1,7 @@
 import { useStore } from '../store';
 import { parseMidi } from './midi';
-import { fileToMonoAudio, isMidi, isAudioOrVideo, TARGET_SR } from './audio';
-import { transcribe, rederive, cancelTranscription } from './transcribe';
+import { fileToMonoAudioPair, isMidi, isAudioOrVideo, TARGET_SR, HIRES_SR } from './audio';
+import { transcribe, rederive, cancelTranscription, filterMinLength } from './transcribe';
 import { rawToSong } from './cleanup';
 import type { CleanupParams } from './transcribe';
 import type { BuildOptions } from './cleanup';
@@ -62,6 +62,9 @@ function persist(song: Song, kind: SongKind, media?: SourceMedia): Promise<void>
 // Set true when the user cancels; in-flight decode/transcription bail out quietly.
 let cancelled = false;
 
+// 44.1 kHz copy of the clip awaiting trim, for the desktop engine (null if unavailable).
+let pendingHiRes: Float32Array | null = null;
+
 function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError';
 }
@@ -73,20 +76,23 @@ function isAbort(err: unknown): boolean {
 export function cancelProcessing(): void {
   cancelled = true;
   cancelTranscription();
+  pendingHiRes = null;
   const s = useStore.getState();
   s.setTranscribing(false);
   s.setProgress(-1);
   s.setStage('');
   s.clearPending();
   s.setRaw(null, '');
+  s.setRawSource(null, null);
   s.setParseError(null);
 }
 
 /** Rebuild the playable Song from the cached raw notes + current build options. */
 function rebuild(): void {
-  const { rawNotes, sourceName, build, setSong } = useStore.getState();
+  const { rawNotes, rawEngine, sourceName, build, setSong } = useStore.getState();
   if (!rawNotes) return;
-  setSong(rawToSong(sourceName, rawNotes, build));
+  const song = rawToSong(sourceName, rawNotes, build);
+  setSong(rawEngine ? { ...song, engine: rawEngine } : song);
 }
 
 /** Entry point for any dropped/selected file. */
@@ -103,6 +109,7 @@ export async function loadFile(file: File): Promise<void> {
         return;
       }
       s.setRaw(null, ''); // clear any prior transcription (hides cleanup panel)
+      s.setRawSource(null, null);
       s.setShowCleanup(false);
       s.setSong(song);
       s.setView('player');
@@ -132,7 +139,7 @@ export async function loadFile(file: File): Promise<void> {
   s.setProgress(-1);
   s.setStage('Reading file…');
   try {
-    const audio = await fileToMonoAudio(file, {
+    const { audio, hiRes } = await fileToMonoAudioPair(file, {
       stage: (label) => useStore.getState().setStage(label),
       ffmpegProgress: (r) => useStore.getState().setProgress(r),
     });
@@ -146,6 +153,7 @@ export async function loadFile(file: File): Promise<void> {
 
     // Pause here: the user clips the section they want before we transcribe.
     useStore.getState().setTranscribing(false);
+    pendingHiRes = hiRes;
     useStore.getState().setPending(audio, name, kind, audio.length / TARGET_SR, file);
   } catch (err) {
     if (cancelled) return;
@@ -159,6 +167,7 @@ export async function loadFile(file: File): Promise<void> {
 
 /** Discard the decoded clip without transcribing. */
 export function cancelTrim(): void {
+  pendingHiRes = null;
   useStore.getState().clearPending();
 }
 
@@ -177,24 +186,43 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
   const { pendingName: name, pendingKind: kind, pendingFile: file } = st;
   const trimStart = start / TARGET_SR;
   const trimEnd = (end > start ? end : audio.length) / TARGET_SR;
+  // The same selection from the 44.1 kHz copy, for the desktop engine.
+  const hi = pendingHiRes;
+  pendingHiRes = null;
+  let hiSlice: Float32Array | null = null;
+  if (hi) {
+    const hs = Math.max(0, Math.round(trimStart * HIRES_SR));
+    const he = Math.min(hi.length, Math.round(trimEnd * HIRES_SR));
+    hiSlice = he > hs ? hi.slice(hs, he) : null;
+  }
 
   cancelled = false;
   st.clearPending();
   st.setTranscribing(true);
   st.setProgress(-1); // indeterminate while the model loads / spectrogram runs
-  st.setStage('Transcribing — this runs entirely on your device…');
+  st.setStage('Transcribing…');
   try {
-    const raw = await transcribe(
+    const result = await transcribe(
       slice,
+      hiSlice,
       useStore.getState().cleanup,
       // Stay indeterminate until real per-frame progress arrives, so the bar
       // animates during model load instead of looking frozen at 0%.
       (p) => useStore.getState().setProgress(p > 0 ? p : -1),
-      (backend) =>
-        useStore.getState().setStage(`Transcribing on your device (${backend})…`),
+      (label) => useStore.getState().setStage(label),
     );
     if (cancelled) return;
-    useStore.getState().setRaw(raw, name);
+    const s2 = useStore.getState();
+    if (result.engine === 'transkun') {
+      // Desktop notes: no worker frames exist, so cleanup works on these notes directly.
+      // Min-length starts off: Transkun's lengths are real key releases, and the on-device
+      // engine's 80 ms default cuts its MAESTRO score from 98.5 to 82.3.
+      s2.setDesktopMinLen(0);
+      s2.setRawSource('transkun', result.notes);
+    } else {
+      s2.setRawSource('basic-pitch', null);
+    }
+    s2.setRaw(result.notes, name);
     rebuild();
     useStore.getState().setShowCleanup(true);
     useStore.getState().setView('player');
@@ -217,6 +245,7 @@ export async function loadSavedSong(id: string): Promise<void> {
   if (!song) return;
   const s = useStore.getState();
   s.setRaw(null, ''); // saved songs are already cleaned up
+  s.setRawSource(null, null);
   s.setShowCleanup(false);
   s.setCurrentSavedId(id);
   s.setSong(song);
@@ -230,14 +259,31 @@ export function updateBuild(partial: Partial<BuildOptions>): void {
   rebuild();
 }
 
+/**
+ * Desktop-transcribed songs: Min-length filters the notes the helper returned, client-side.
+ * (Asking the worker to re-derive would return nothing: it holds no frames for these songs.)
+ */
+export function updateDesktopMinLength(ms: number): void {
+  const st = useStore.getState();
+  st.setDesktopMinLen(ms);
+  if (st.rawEngine !== 'transkun' || !st.rawFull) return;
+  st.setRaw(filterMinLength(st.rawFull, ms), st.sourceName);
+  rebuild();
+}
+
 // Cleanup-threshold changes re-derive from the cached model output (debounced).
 let rederiveTimer: ReturnType<typeof setTimeout> | undefined;
 export function updateCleanup(partial: Partial<CleanupParams>): void {
+  if (useStore.getState().rawEngine === 'transkun') {
+    // Never re-derive a desktop song from the worker: it would come back empty.
+    if (partial.minNoteLenMs != null) updateDesktopMinLength(partial.minNoteLenMs);
+    return;
+  }
   useStore.getState().setCleanup(partial);
   clearTimeout(rederiveTimer);
   rederiveTimer = setTimeout(async () => {
     const st = useStore.getState();
-    if (!st.rawNotes) return;
+    if (!st.rawNotes || st.rawEngine === 'transkun') return;
     st.setStage('Updating…');
     st.setTranscribing(true);
     try {

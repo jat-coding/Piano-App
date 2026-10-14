@@ -2,6 +2,8 @@ import { extractAudioWithFfmpeg } from './ffmpeg';
 
 /** Basic Pitch expects mono audio at this sample rate. */
 export const TARGET_SR = 22050;
+/** The desktop engine (Transkun) runs at 44.1 kHz; all its accuracy numbers are at that rate. */
+export const HIRES_SR = 44100;
 
 function decode(buf: ArrayBuffer): Promise<AudioBuffer> {
   // Use a fresh context; decodeAudioData detaches its input, so callers pass a copy.
@@ -42,6 +44,17 @@ export async function fileToMonoAudio(
   file: File,
   progress?: DecodeProgress,
 ): Promise<Float32Array> {
+  return (await fileToMonoAudioPair(file, progress)).audio;
+}
+
+/**
+ * Same as fileToMonoAudio, plus a 44.1 kHz mono copy for the desktop engine (null if that
+ * render fails; the on-device engine then still has its 22.05 kHz copy).
+ */
+export async function fileToMonoAudioPair(
+  file: File,
+  progress?: DecodeProgress,
+): Promise<{ audio: Float32Array; hiRes: Float32Array | null }> {
   const raw = await file.arrayBuffer();
 
   let audioBuffer: AudioBuffer;
@@ -56,7 +69,14 @@ export async function fileToMonoAudio(
   }
 
   progress?.stage('Preparing audio…');
-  return resampleToMono(audioBuffer, TARGET_SR);
+  const audio = await resampleToMono(audioBuffer, TARGET_SR);
+  let hiRes: Float32Array | null = null;
+  try {
+    hiRes = await resampleToMono(audioBuffer, HIRES_SR);
+  } catch (err) {
+    console.warn('Could not prepare 44.1 kHz audio for the desktop engine', err);
+  }
+  return { audio, hiRes };
 }
 
 export function isAudioOrVideo(file: File): boolean {

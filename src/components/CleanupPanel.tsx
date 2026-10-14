@@ -1,5 +1,6 @@
 import { useStore } from '../store';
-import { updateBuild, updateCleanup } from '../lib/pipeline';
+import { updateBuild, updateCleanup, updateDesktopMinLength } from '../lib/pipeline';
+import { ENGINE_LABEL } from '../lib/transcribe';
 import { MIN_MIDI, MAX_MIDI } from '../types';
 import type { Quantize } from '../lib/cleanup';
 import { SlidersIcon, CloseIcon } from './icons';
@@ -18,6 +19,9 @@ export function CleanupPanel() {
   const cleanup = useStore((s) => s.cleanup);
   const transcribing = useStore((s) => s.transcribing);
   const noteCount = useStore((s) => s.song?.notes.length ?? 0);
+  const engine = useStore((s) => s.rawEngine);
+  const desktopMinLen = useStore((s) => s.desktopMinLenMs);
+  const desktop = engine === 'transkun';
 
   if (!rawNotes) return null;
 
@@ -44,6 +48,13 @@ export function CleanupPanel() {
         </div>
       </div>
 
+      {engine && (
+        <p className={`engine-note${desktop ? '' : ' fallback'}`}>
+          {ENGINE_LABEL[engine]}
+          {!desktop && ': the desktop wasn\u2019t reachable, so expect some extra notes'}
+        </p>
+      )}
+
       {/* Hand split */}
       <label className="field">
         <span>
@@ -67,7 +78,9 @@ export function CleanupPanel() {
         </div>
       </label>
 
-      {/* Confidence (onset threshold) */}
+      {/* Confidence (onset threshold): on-device engine only. The desktop engine has no
+          threshold to re-run, and re-deriving would wipe the song to 0 notes. */}
+      {!desktop && (
       <label className="field">
         <span>
           Confidence: <b>{cleanup.onsetThresh.toFixed(2)}</b>
@@ -81,8 +94,24 @@ export function CleanupPanel() {
           onChange={(e) => updateCleanup({ onsetThresh: parseFloat(e.target.value) })}
         />
       </label>
+      )}
 
-      {/* Min note length */}
+      {/* Min note length: desktop songs filter their returned notes client-side, off by default */}
+      {desktop ? (
+      <label className="field">
+        <span>
+          Min note length: <b>{desktopMinLen === 0 ? 'Off' : `${desktopMinLen} ms`}</b>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={300}
+          step={10}
+          value={desktopMinLen}
+          onChange={(e) => updateDesktopMinLength(parseInt(e.target.value, 10))}
+        />
+      </label>
+      ) : (
       <label className="field">
         <span>
           Min note length: <b>{cleanup.minNoteLenMs} ms</b>
@@ -96,6 +125,7 @@ export function CleanupPanel() {
           onChange={(e) => updateCleanup({ minNoteLenMs: parseInt(e.target.value, 10) })}
         />
       </label>
+      )}
 
       {/* Quantize */}
       <label className="field">

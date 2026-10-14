@@ -61,4 +61,28 @@ export default defineConfig({
     port: 5173,
     host: true,
   },
+  // The desktop transcription helper (tools/transcribe-helper, 127.0.0.1:5192, a system unit)
+  // is reached through this same-origin route, so the phone over Tailscale needs no new port.
+  // Long timeouts: a CPU-only run of a 2-minute clip takes minutes. Hosts without this proxy
+  // (e.g. a Vercel build) answer 404, and the app falls back to the on-device engine.
+  preview: {
+    proxy: {
+      '/api/transcribe': {
+        target: 'http://127.0.0.1:5192',
+        changeOrigin: false,
+        timeout: 15 * 60 * 1000,
+        proxyTimeout: 15 * 60 * 1000,
+        // The proxy doesn't pass a client hang-up upstream on its own, so Cancel in the app
+        // would leave the GPU job running. Drop the upstream request when the client goes away
+        // before the reply is done; the helper sees the closed socket and stops the job.
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, _req, res) => {
+            res.on('close', () => {
+              if (!res.writableFinished) proxyReq.destroy();
+            });
+          });
+        },
+      },
+    },
+  },
 });
