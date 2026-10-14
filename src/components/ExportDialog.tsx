@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { getMedia, listSongs } from '../lib/library';
 import { whenSaved } from '../lib/pipeline';
 import type { ExportPlan, ExportResult } from '../export/exportVideo';
+import type { SessionExport } from '../interactive/recording';
 import { formatTime } from '../lib/format';
 import { ExportVideoIcon } from './icons';
 
@@ -36,7 +37,7 @@ function download(result: ExportResult): void {
  * progress bar + Cancel, then hands over the file. Every failure lands on
  * screen as text — never a silent close.
  */
-export function ExportDialog({ onClose }: { onClose: () => void }) {
+export function ExportDialog({ onClose, session }: { onClose: () => void; session?: SessionExport | null }) {
   const showHands = useStore((s) => s.showHands);
   const song = useStore((s) => s.song);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
@@ -49,6 +50,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     (async () => {
       try {
         if (!song) throw new Error('No song is loaded.');
+        if (session) {
+          const { planSessionExport } = await import('../export/exportVideo');
+          if (live) setPhase({ kind: 'confirm', plan: planSessionExport(session) });
+          return;
+        }
         await whenSaved();
         const id = useStore.getState().currentSavedId;
         const media = id ? await getMedia(id) : null;
@@ -64,7 +70,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     return () => {
       live = false;
     };
-  }, [song]);
+  }, [song, session]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -124,17 +130,29 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
   const pct = phase.kind === 'running' ? Math.round(phase.ratio * 100) : 0;
 
   return (
-    <div className="export-backdrop" role="dialog" aria-modal="true" aria-label="Export video">
+    <div className="export-backdrop" role="dialog" aria-modal="true" aria-label={session ? 'Export my session' : 'Export video'}>
       <div className="export-card">
         <div className="export-icon brass-mark">
           <ExportVideoIcon size={34} />
         </div>
-        <h2>Export video</h2>
+        <h2>{session ? 'Export my session' : 'Export video'}</h2>
 
         {phase.kind === 'loading' && <p className="export-sub">Checking this song…</p>}
 
         {phase.kind === 'confirm' && (
           <>
+            {phase.plan.session ? (
+              <ul className="export-plan">
+                <li>Vertical video for your phone, {formatTime(phase.plan.duration)} long.</li>
+                <li>The falling notes, with your hits lighting up and wrong keys flashing red, as they happened.</li>
+                <li>
+                  {phase.plan.session.track.sound === 'mic'
+                    ? 'Sound: your playing, as the microphone heard it.'
+                    : "Sound: Cascade's piano playing the keys you pressed."}
+                </li>
+                <li>Your score at the end.</li>
+              </ul>
+            ) : (
             <ul className="export-plan">
               <li>
                 Vertical video for your phone, {formatTime(phase.plan.duration)} long.
@@ -155,6 +173,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
                   : 'No hands (turned off in Settings).'}
               </li>
             </ul>
+            )}
             {phase.plan.notes.map((n) => (
               <p key={n} className="export-note">
                 {n}

@@ -1599,3 +1599,150 @@ body,
   justify-content: center;
   margin-top: 8px;
 }
+
+/* ---------- Play along ---------- */
+.player.playing-along .bottom-bar {
+  /* Hidden but still laid out, so the keyboard keeps its place above it. */
+  visibility: hidden;
+  pointer-events: none;
+}
+.play-card {
+  width: min(440px, 92vw);
+}
+.play-input {
+  width: 100%;
+  margin: 4px 0;
+}
+.play-input .seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.mic-meter {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 240, 210, 0.08);
+  overflow: hidden;
+}
+.mic-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--sage), var(--brass-soft));
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 60ms linear;
+}
+.play-countdown {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  pointer-events: none;
+  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.45), transparent 60%);
+}
+.play-countdown span {
+  font-family: var(--display);
+  font-size: clamp(72px, 18vmin, 160px);
+  color: var(--brass-soft);
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.7);
+  animation: count-pop 1s ease-out;
+}
+.play-countdown p {
+  margin: 0;
+  font-size: 15px;
+  color: rgba(241, 231, 208, 0.8);
+}
+@keyframes count-pop {
+  from {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  to {
+    transform: scale(1);
+  }
+}
+.play-hud {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 17, 13, 0.82);
+  border: 1px solid rgba(255, 220, 170, 0.16);
+  font-size: 13px;
+  backdrop-filter: blur(8px);
+}
+.play-listening {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(241, 231, 208, 0.85);
+}
+.play-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sage);
+  animation: pulse-hint 1.4s ease-in-out infinite;
+}
+.play-streak {
+  color: var(--brass-soft);
+  font-variant-numeric: tabular-nums;
+}
+.ghost-btn.small {
+  padding: 5px 12px;
+  font-size: 13px;
+  border-radius: 999px;
+}
+.export-actions.wrap {
+  flex-wrap: wrap;
+}
+.score-card .score-song {
+  margin: 0;
+  font-family: var(--display);
+  color: var(--brass);
+  font-size: 18px;
+}
+.score-card .score-big {
+  margin: 4px 0 0;
+  font-family: var(--display);
+  font-size: 64px;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.score-card .score-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--brass-soft);
+}
+.score-row {
+  display: flex;
+  justify-content: center;
+  gap: 36px;
+  margin: 6px 0 2px;
+}
+.score-row div {
+  display: grid;
+  gap: 2px;
+}
+.score-row b {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.score-row span {
+  font-size: 12px;
+  color: rgba(241, 231, 208, 0.7);
+}

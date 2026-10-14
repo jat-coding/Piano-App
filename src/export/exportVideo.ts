@@ -4,6 +4,7 @@ import type { SongMedia } from '../lib/library';
 import { ExportFrameRenderer, EXPORT_H, EXPORT_W, type ExportLayout } from './frameRenderer';
 import { renderPianoAudio, sliceOriginalAudio, audioBufferToWav } from './exportAudio';
 import { openVideo, type FrameSource } from './videoSource';
+import type { SessionExport } from '../interactive/recording';
 
 export const FPS = 30;
 const SAMPLE_RATE = 48000;
@@ -25,6 +26,8 @@ export interface ExportPlan {
   notes: string[];
   /** Draw the animated hands (Settings → Show hands). Defaults to on. */
   hands?: boolean;
+  /** A play-along session: its timeline, hits, score card, and the player's own sound. */
+  session?: SessionExport;
 }
 
 export interface ExportProgress {
@@ -54,6 +57,11 @@ function forced(): string {
   } catch {
     return '';
   }
+}
+
+/** The plan for "Export my session": falling notes, the session's own sound and length. */
+export function planSessionExport(session: SessionExport): ExportPlan {
+  return { layout: 'full', sound: 'piano', media: null, duration: session.track.duration, notes: [], session };
 }
 
 export function planExport(song: Song, media: SongMedia | null, kind: string | null): ExportPlan {
@@ -150,8 +158,9 @@ async function pickAudioCodec(): Promise<{ codec: string; mux: 'aac' | 'opus' } 
   return null;
 }
 
-function safeName(name: string): string {
-  return (name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Cascade') + ' - Cascade';
+function safeName(name: string, plan?: ExportPlan): string {
+  const base = name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Cascade';
+  return base + (plan?.session ? ' - my session' : '') + ' - Cascade';
 }
 
 /**
@@ -183,7 +192,9 @@ export async function exportVideo(
   // ---- 1. sound ----
   onProgress({ stage: 'Preparing the sound…', ratio: 0 });
   let audio: AudioBuffer;
-  if (plan.sound === 'original' && plan.media) {
+  if (plan.session) {
+    audio = plan.session.audio;
+  } else if (plan.sound === 'original' && plan.media) {
     try {
       audio = await sliceOriginalAudio(plan.media, plan.duration, SAMPLE_RATE, (label) =>
         onProgress({ stage: label, ratio: 0.01 }),
@@ -216,7 +227,7 @@ export async function exportVideo(
   }
   check(signal);
 
-  const renderer = new ExportFrameRenderer(song, layout, plan.hands ?? true);
+  const renderer = new ExportFrameRenderer(song, layout, plan.hands ?? true, plan.session?.track ?? null);
   const totalFrames = Math.max(1, Math.round(plan.duration * FPS));
   const vCodec = force === 'webm' ? null : await pickVideoCodec();
 
@@ -309,7 +320,7 @@ export async function exportVideo(
 
     return {
       blob: new Blob([bytes as BlobPart], { type: 'video/mp4' }),
-      fileName: `${safeName(song.name)}.mp4`,
+      fileName: `${safeName(song.name, plan)}.mp4`,
       mimeType: 'video/mp4',
       videoCodec: vCodec.codec,
       audioCodec,
@@ -430,7 +441,7 @@ async function recordRealtime(
   const elapsed = (performance.now() - t0) / 1000;
   return {
     blob: new Blob(parts, { type }),
-    fileName: `${safeName(song.name)}.${ext}`,
+    fileName: `${safeName(song.name, plan)}.${ext}`,
     mimeType: type,
     videoCodec: type,
     audioCodec: type,

@@ -22,6 +22,7 @@ export const COLORS = {
   rightDark: '#a06a28',
   left: '#5f8a96', // dusty teal-blue
   leftDark: '#3c5b64',
+  wrong: '#c4473f', // play along: a wrong key
 };
 
 /** Hands never shrink below this many CSS px per white key (88 keys on a phone are narrow). */
@@ -108,6 +109,13 @@ export class Renderer {
   private expected = new Set<number>();
   // Transient highlights for keys tapped on the on-screen keyboard.
   private flashes = new Map<number, number>();
+  // Play along: keys flashing red (wrong), until performance.now() passes the value.
+  private wrongs = new Map<number, number>();
+  /**
+   * Play along: a note lights its key only once this says it was played (the song waits
+   * on it until then). Null = every note lights as the song reaches it.
+   */
+  litFilter: ((index: number) => boolean) | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -145,6 +153,11 @@ export class Renderer {
   /** Briefly light a key the player pressed on the on-screen keyboard. */
   flashKey(midi: number): void {
     this.flashes.set(midi, performance.now() + 170);
+  }
+
+  /** Flash a key red: the player hit it, but the song doesn't have it here. */
+  flashWrong(midi: number): void {
+    this.wrongs.set(midi, performance.now() + 320);
   }
 
   /**
@@ -362,9 +375,10 @@ export class Renderer {
       // Note is being played when the strike line is within its span.
       // Only a key with its finger on it lights up. Once just the pedal holds the note the key
       // looks unpressed (a lit key with no finger on it reads as the wrong hand); the bar's
-      // hollow tail shows that it still sounds.
+      // hollow tail shows that it still sounds. In a play-along session (litFilter set) a key
+      // lights only once the player has hit it.
       const lit = currentTime >= n.startTime && currentTime <= (hands ? hands.litEnd(i) : end) && currentTime < sus;
-      if (lit && !active.has(n.midi)) active.set(n.midi, { hand });
+      if (lit && !active.has(n.midi) && (!this.litFilter || this.litFilter(i))) active.set(n.midi, { hand });
 
       const black = isBlackKey(n.midi);
       const w = key.w * (black ? 1 : 0.9);
@@ -433,7 +447,11 @@ export class Renderer {
       const lit = active.get(key.midi);
       const hand = lit?.hand;
       const flashed = (this.flashes.get(key.midi) ?? 0) > now;
-      if (hand) {
+      const wrong = (this.wrongs.get(key.midi) ?? 0) > now;
+      if (wrong) {
+        ctx.fillStyle = COLORS.wrong;
+        ctx.fillRect(key.x, strikeY, key.w, keyboardHeight);
+      } else if (hand) {
         ctx.fillStyle = noteColor(hand, false);
         ctx.fillRect(key.x, strikeY, key.w, keyboardHeight);
       } else if (flashed) {
@@ -463,10 +481,13 @@ export class Renderer {
       const lit = active.get(key.midi);
       const hand = lit?.hand;
       const flashed = (this.flashes.get(key.midi) ?? 0) > now;
-      ctx.fillStyle = hand ? noteColor(hand, true) : flashed ? COLORS.press : COLORS.blackKey;
+      const wrong = (this.wrongs.get(key.midi) ?? 0) > now;
+      ctx.fillStyle = wrong ? COLORS.wrong : hand ? noteColor(hand, true) : flashed ? COLORS.press : COLORS.blackKey;
       this.roundRect(key.x, strikeY, key.w, blackH, 3);
       ctx.fill();
-      if (!hand && !flashed) {
+      if (wrong) {
+        /* plain red */
+      } else if (!hand && !flashed) {
         ctx.fillStyle = COLORS.blackKeySheen;
         this.roundRect(key.x + 1, strikeY + 1, key.w - 2, blackH * 0.18, 2);
         ctx.fill();
