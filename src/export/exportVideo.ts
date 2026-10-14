@@ -49,7 +49,7 @@ export interface ExportResult {
 
 /**
  * Debug hook for testing the fallback chain on a desktop browser:
- * localStorage['cascade.exportForce'] = 'opus' | 'ffmpeg' | 'webm'.
+ * localStorage['cascade.exportForce'] = 'opus' | 'ffmpeg' | 'webm' | 'nodesc' | 'webkit' | 'webkit-raw'.
  */
 function forced(): string {
   try {
@@ -136,12 +136,20 @@ function videoConfig(codec: string): VideoEncoderConfig {
   };
 }
 
+/** Safari, and every browser on iPhone/iPad (they all run Apple's WebKit). */
+function isAppleWebKit(): boolean {
+  const ua = navigator.userAgent;
+  return /iP(hone|ad|od)/.test(ua) || (/AppleWebKit/.test(ua) && !/(Chrome|Chromium|Edg|OPR)\//.test(ua));
+}
+
 async function pickAudioCodec(): Promise<{ codec: string; mux: 'aac' | 'opus' } | null> {
   if (typeof AudioEncoder === 'undefined') return null;
   const force = forced();
   const candidates: { codec: string; mux: 'aac' | 'opus' }[] = [];
   if (force !== 'opus') candidates.push({ codec: 'mp4a.40.2', mux: 'aac' });
-  candidates.push({ codec: 'opus', mux: 'opus' });
+  // Apple's Photos/QuickTime don't reliably play Opus inside an MP4, so on Apple
+  // browsers a missing AAC encoder goes to the ffmpeg AAC route instead.
+  if (force === 'opus' || !isAppleWebKit()) candidates.push({ codec: 'opus', mux: 'opus' });
   for (const c of candidates) {
     try {
       const { supported } = await AudioEncoder.isConfigSupported({
@@ -261,8 +269,13 @@ export async function exportVideo(
     }
     check(signal);
 
+    // Kept so the picture can be re-muxed without the sound if the sound check fails.
+    const videoChunks: { chunk: EncodedVideoChunk; meta?: EncodedVideoChunkMetadata }[] = [];
     const encoder = new VideoEncoder({
-      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      output: (chunk, meta) => {
+        muxer.addVideoChunk(chunk, meta);
+        if (aCodec) videoChunks.push({ chunk, meta });
+      },
       error: fail,
     });
     encoder.configure(videoConfig(vCodec.codec));
@@ -309,12 +322,51 @@ export async function exportVideo(
 
     let bytes: Uint8Array = new Uint8Array(target.buffer);
     let audioCodec = aCodec?.codec ?? '';
-    if (!aCodec) {
+    const addSoundWithFfmpeg = async () => {
       onProgress({ stage: 'Adding the sound (first-time tools download)…', ratio: 0.97 });
       const { muxAacWithFfmpeg } = await import('../lib/ffmpeg');
+      if (aCodec) {
+        // ffmpeg can't open a file whose sound track is broken, so start from the picture alone.
+        const pictureOnly = new ArrayBufferTarget();
+        const remux = new Muxer({
+          target: pictureOnly,
+          video: { codec: vCodec.mux, width: EXPORT_W, height: EXPORT_H, frameRate: FPS },
+          fastStart: 'in-memory',
+        });
+        for (const v of videoChunks) remux.addVideoChunk(v.chunk, v.meta);
+        remux.finalize();
+        videoChunks.length = 0;
+        bytes = new Uint8Array(pictureOnly.buffer);
+      }
       bytes = await muxAacWithFfmpeg(bytes, audioBufferToWav(audio));
       audioCodec = 'aac (ffmpeg.wasm)';
+    };
+    if (!aCodec) {
+      await addSoundWithFfmpeg();
       warnings.push('This browser has no built-in audio encoder, so the sound was added with a slower helper.');
+    }
+    check(signal);
+
+    // Play the finished file's sound back in this browser before handing it over. A
+    // browser's own encoder can return a track that's there but won't play (seen as a
+    // silent export on iPhone); if so, redo the sound with the ffmpeg route.
+    onProgress({ stage: 'Checking the sound…', ratio: 0.98 });
+    let heard = await soundCheck(bytes, audio);
+    console.info('[export] sound check', audioCodec, heard);
+    if (heard.verdict !== 'ok' && aCodec) {
+      await addSoundWithFfmpeg();
+      heard = await soundCheck(bytes, audio);
+      console.info('[export] sound check after ffmpeg', heard);
+      warnings.push("This browser's built-in sound encoder made a silent track, so the sound was added with a slower helper.");
+    }
+    if (heard.verdict === 'source-silent') {
+      warnings.push(
+        plan.session?.track.sound === 'mic'
+          ? 'The microphone recorded no sound during this session, so the video is silent.'
+          : 'The sound for this song is silent, so the video is too.',
+      );
+    } else if (heard.verdict !== 'ok') {
+      warnings.push("The sound in this video may not play: this browser couldn't play it back to check.");
     }
     check(signal);
 
@@ -333,9 +385,103 @@ export async function exportVideo(
   }
 }
 
+interface SoundCheck {
+  /** 'ok' = plays back with sound; 'missing' = no playable sound track; 'silent' = plays, but silent. */
+  verdict: 'ok' | 'missing' | 'silent' | 'source-silent';
+  sourcePeak: number;
+  peak: number;
+  seconds: number;
+}
+
+function peakOf(buffer: AudioBuffer): number {
+  let peak = 0;
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const d = buffer.getChannelData(c);
+    for (let i = 0; i < d.length; i += 4) {
+      const v = Math.abs(d[i]);
+      if (v > peak) peak = v;
+    }
+  }
+  return peak;
+}
+
+/** Decode the finished MP4's sound with this browser's own decoder and compare to the source. */
+async function soundCheck(bytes: Uint8Array, source: AudioBuffer): Promise<SoundCheck> {
+  const sourcePeak = peakOf(source);
+  if (sourcePeak < 1e-3) return { verdict: 'source-silent', sourcePeak, peak: 0, seconds: 0 };
+  let decoded: AudioBuffer;
+  try {
+    // decodeAudioData takes ownership of its buffer, so hand it a copy.
+    decoded = await new OfflineAudioContext(2, 1, SAMPLE_RATE).decodeAudioData(bytes.slice().buffer);
+  } catch (err) {
+    console.warn('[export] sound check: decode failed', err);
+    return { verdict: 'missing', sourcePeak, peak: 0, seconds: 0 };
+  }
+  const peak = peakOf(decoded);
+  const seconds = decoded.duration;
+  // AAC changes levels a little; a real track lands within a few dB of the source.
+  const verdict = seconds < source.duration * 0.5 ? 'missing' : peak < sourcePeak * 0.1 ? 'silent' : 'ok';
+  return { verdict, sourcePeak, peak, seconds };
+}
+
 function formatLeft(sec: number): string {
   if (sec < 60) return `${sec}s`;
   return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`;
+}
+
+function bytesOf(d: AllowSharedBufferSource): Uint8Array {
+  return ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d);
+}
+
+/** Reads one MPEG-4 descriptor header (tag + 1–4 byte size) at `at`. */
+function descriptorAt(b: Uint8Array, at: number): { tag: number; body: number; end: number } | null {
+  if (at >= b.length) return null;
+  let size = 0;
+  let i = at + 1;
+  for (let n = 0; n < 4; n++, i++) {
+    if (i >= b.length) return null;
+    size = (size << 7) | (b[i] & 0x7f);
+    if (!(b[i] & 0x80)) break;
+  }
+  const body = i + 1;
+  return body + size <= b.length ? { tag: b[at], body, end: body + size } : null;
+}
+
+/**
+ * The AAC setup block (AudioSpecificConfig) the MP4 needs, from an encoder's
+ * `description`. WebCodecs says that's the raw config, 2 bytes for AAC-LC (Chrome).
+ * Safari 26 instead returns a whole MPEG-4 ES descriptor with the config inside
+ * (WebKit bug 302253); written as-is, the MP4's sound track can't be decoded and
+ * the video plays silent. Returns null when there's nothing usable.
+ */
+export function aacSetup(raw: Uint8Array): Uint8Array | null {
+  if (raw.length === 0) return null;
+  // A real config starts with the object type (5 bits, never 0); descriptor tags 3/4/5 would read as 0.
+  if (raw[0] >> 3 !== 0) return raw.slice();
+  let d = descriptorAt(raw, 0);
+  if (d?.tag === 0x03) {
+    // ES_Descriptor: ES_ID (2) + flags (1), plus optional fields the flags announce.
+    const flags = raw[d.body + 2];
+    let at = d.body + 3;
+    if (flags & 0x80) at += 2;
+    if (flags & 0x40) at += 1 + raw[at];
+    if (flags & 0x20) at += 2;
+    d = descriptorAt(raw, at);
+  }
+  if (d?.tag === 0x04) d = descriptorAt(raw, d.body + 13); // DecoderConfigDescriptor's fixed part
+  if (d?.tag !== 0x05 || d.end - d.body < 2) return null;
+  const asc = raw.slice(d.body, d.end);
+  return asc[0] >> 3 !== 0 ? asc : null;
+}
+
+/** Test hook: wrap a raw config the way Safari 26 returns it (bytes from WebKit bug 302253). */
+function wrapLikeWebKit(asc: Uint8Array): Uint8Array {
+  return new Uint8Array([
+    3, 128, 128, 128, 34, 0, 0, 0,
+    4, 128, 128, 128, 20, 64, 20, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    5, 128, 128, 128, asc.length, ...asc,
+    6, 128, 128, 128, 1, 2,
+  ]);
 }
 
 async function encodeAudio(
@@ -344,8 +490,35 @@ async function encodeAudio(
   muxer: Muxer<ArrayBufferTarget>,
   fail: (e: DOMException) => void,
 ): Promise<void> {
+  // Test hooks: 'nodesc' = an encoder that returns an empty setup block, 'webkit' = one
+  // that returns it wrapped the way Safari 26 does (see aacSetup).
+  const breakIt = forced();
+  let logged = false;
   const encoder = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    output: (chunk, meta) => {
+      const desc = meta?.decoderConfig?.description;
+      if (!logged) {
+        logged = true;
+        console.info('[export] audio encoder setup', {
+          codec: meta?.decoderConfig?.codec,
+          sampleRate: meta?.decoderConfig?.sampleRate,
+          channels: meta?.decoderConfig?.numberOfChannels,
+          descriptionBytes: desc ? desc.byteLength : null,
+          firstChunkBytes: chunk.byteLength,
+        });
+      }
+      if (meta?.decoderConfig && codec === 'mp4a.40.2') {
+        let raw = desc ? bytesOf(desc) : null;
+        if (raw && breakIt === 'nodesc') raw = new Uint8Array(0);
+        if (raw && breakIt === 'webkit') raw = wrapLikeWebKit(raw);
+        // 'webkit-raw' skips the unwrap (the old behaviour) to test the sound check below.
+        const asc = raw && breakIt === 'webkit-raw' ? wrapLikeWebKit(raw) : raw ? aacSetup(raw) : null;
+        const { description: _drop, ...rest } = meta.decoderConfig;
+        // No usable setup block: leave the muxer's own (correct for AAC-LC 48k stereo).
+        meta = { ...meta, decoderConfig: asc ? { ...rest, description: asc } : rest };
+      }
+      muxer.addAudioChunk(chunk, meta);
+    },
     error: fail,
   });
   encoder.configure({
