@@ -88,10 +88,18 @@ const PRESS_PIP = -2;
 const PRESS_DIP_RATIO = -0.08;
 /** Preparation lift before a strike (MCP extension), degrees. */
 const LIFT_MCP = -6;
+/** ...and this much more for a finger already reaching for its key (not one still flying with a leap). */
+const LIFT_MCP_ENGAGED = -6;
+/**
+ * The hand rides each keystroke: the knuckles sink as a finger strikes (arm weight into the
+ * key) and rise back after, mm (see HandPose.sink). With the fingertip kept on its key, the sinking
+ * knuckles make the pressing finger bend further, which is the visible "grab" of a stroke.
+ */
+const BOB_PRESS = 6;
 /** Idle fingers: a hair above the key, with a slow, tiny drift each. */
-const MICRO_MCP = 1.2;
+const MICRO_MCP = 2.6;
 /** How much an idle finger follows its neighbour's MCP move (pianist-scaled enslaving). */
-const COUPLE: Record<string, number> = { '4-5': 0.15, '5-4': 0.15, '3-4': 0.12, '4-3': 0.12, '2-3': 0.06, '3-2': 0.06 };
+const COUPLE: Record<string, number> = { '4-5': 0.2, '5-4': 0.2, '3-4': 0.16, '4-3': 0.16, '2-3': 0.08, '3-2': 0.08 };
 /** Octaves: the middle fingers curl up out of the way (PIP 55-70°, tips 15-25 mm up). */
 const OCTAVE_PIP_MIN = 55;
 const OCTAVE_TIP_Z = 20;
@@ -511,7 +519,7 @@ function solveAt(pose: HandPose, tf: TipFrame, palmOnly: boolean): Skeleton | Pa
 
   // The passage's knuckle height (see below) bounds how near and how far each finger
   // can reach: the palm solve keeps every engaged finger inside those bounds.
-  const hPass = H0 + 10 * st.octave - 4 * st.arpeggio + st.leapLift;
+  const hPass = H0 + 10 * st.octave - 4 * st.arpeggio + st.leapLift - BOB_PRESS * (pose.sink ?? 0);
   const rollMaxLM = ROLL_DROP + OCTAVE_ROLL_DROP * st.octave;
   const reachLM = [0, 1, 2, 3, 4, 5].map((f) => {
     if (f < 2) return [0, 0];
@@ -821,7 +829,7 @@ function solveAt(pose: HandPose, tf: TipFrame, palmOnly: boolean): Skeleton | Pa
     let splay = lerp(splayIdle, splayEng, e);
     // Keystroke (MCP-led), preparation lift, idle drift and neighbour coupling, on top.
     let dip = DIP_RATIO * p;
-    m += PRESS_MCP * fp.press + LIFT_MCP * fp.lift;
+    m += PRESS_MCP * fp.press + (LIFT_MCP + LIFT_MCP_ENGAGED * e) * fp.lift;
     p += PRESS_PIP * fp.press;
     dip += PRESS_DIP_RATIO * p * fp.press;
     const idle = 1 - e;

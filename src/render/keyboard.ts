@@ -79,6 +79,8 @@ export function indexKeys(keys: KeyGeometry[]): Map<number, KeyGeometry> {
 const OUTLIER_SHARE = 0.03;
 /** …and only if this many semitones separate them from the rest. */
 const OUTLIER_GAP = 4;
+/** A note sounding at least this long (s) is never treated as a stray (see keyboardRange). */
+const HELD_NOTE = 0.3;
 
 /**
  * Lowest/highest pitch worth zooming the keyboard to. Transcription leaves the
@@ -114,9 +116,18 @@ export function robustPitchRange(midis: number[]): { lo: number; hi: number; out
  * The keyboard range to show for a song: its pitch range (stray outliers
  * ignored) plus a little margin, at least ~2 octaves, snapped to white keys.
  */
-export function keyboardRange(notes: { midi: number }[]): { lo: number; hi: number } {
+export function keyboardRange(notes: { midi: number; duration?: number }[]): { lo: number; hi: number } {
   if (!notes.length) return { lo: 48, hi: 84 };
   const r = robustPitchRange(notes.map((n) => n.midi));
+  // A held note is music, not a ghost (those are clicks and overtones, gone in a blink): it
+  // stays on the keyboard. With few notes (the desktop engine gives about half as many) the
+  // "at least 2" tail above could otherwise cut a real opening or closing note, which then
+  // had no key and no finger at all.
+  for (const n of notes) {
+    if ((n.duration ?? 0) < HELD_NOTE) continue;
+    r.lo = Math.min(r.lo, n.midi);
+    r.hi = Math.max(r.hi, n.midi);
+  }
   let lo = Math.max(MIN_MIDI, r.lo - 2);
   let hi = Math.min(MAX_MIDI, r.hi + 2);
   // Too narrow a range makes comically wide keys — widen around the centre.

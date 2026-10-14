@@ -168,6 +168,14 @@ const MAX_DASH = 50;
  */
 const HOLD_SLACK = 1.5;
 
+/**
+ * A finger can't come off one key and strike a different one faster than this (s). A
+ * chord played slightly rolled (onsets 35-80 ms apart, common in real recordings) lands as
+ * two events; reusing a finger across them left the first note's press ending before it
+ * began, so that note showed no finger at all.
+ */
+const MIN_RESTRIKE = 0.09;
+
 /** Signed distance for the ordered finger pair, in the right-hand sense. */
 function spanDist(hand: PlayHand, pa: number, pb: number): number {
   return hand === 'right' ? pb - pa : pa - pb;
@@ -335,6 +343,13 @@ function transitionCost(hand: PlayHand, a: Ev, sa: State, b: Ev, sb: State): num
     }
   }
   let c = pairs / Math.max(a.pitch.length, b.pitch.length);
+  if (gap < MIN_RESTRIKE) {
+    for (let i = 0; i < a.pitch.length; i++) {
+      for (let j = 0; j < b.pitch.length; j++) {
+        if (sa.fingers[i] === sb.fingers[j] && a.pitch[i] !== b.pitch[j]) c += W.heldConflict;
+      }
+    }
+  }
 
   // Notes of `a` still held when `b` is struck: their fingers are busy.
   for (let i = 0; i < a.pitch.length; i++) {

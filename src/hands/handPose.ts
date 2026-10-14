@@ -59,6 +59,8 @@ export interface HandPose {
   fingers: FingerPose[];
   /** How fast the whole hand is gliding, white keys per second (for motion smoothing). */
   speed: number;
+  /** The hand sinking into a keystroke (0..1): rises over SINK_IN before a strike, eases out after. */
+  sink?: number;
   /** How far the current glide goes, white keys (0 when the hand is not gliding). */
   glideDist: number;
   style: PassageStyle;
@@ -98,7 +100,7 @@ interface Passage {
 const EASE_IN = 0.15;
 const EASE_OUT = 0.25;
 /** Lift before a strike: starts this long before the onset. */
-const PREP = 0.12;
+const PREP = 0.15;
 /** Fingers change shape one after another, this far apart (s). */
 const STAGGER = 0.03;
 /** Neighbour fingers follow a moving finger this much later. */
@@ -179,6 +181,8 @@ const PRESS_IN = 0.03; // the dip into the key
 /** A hand move this small (white keys) doesn't take a finger off its key early (see fingerOff). */
 const SMALL_SHIFT = 1;
 const LIFT = 0.07; // lifting off after the note ends
+const SINK_IN = 0.08; // the hand starts sinking into a keystroke this long before it lands...
+const SINK_OUT = 0.22; // ...and rises back over this long after
 const RELEASE_BLEND = 0.1; // a lifted finger rejoins the hand over this long
 const APPROACH = 0.18; // a finger starts reaching for its next key this long before landing
 const ENGAGE_RELEASE = 0.3;
@@ -778,7 +782,20 @@ export class HandAnimator {
       const dt = f === 1 ? 0 : STAGGER * Math.abs(f - lead);
       lagStyle.push(dt ? this.style(hand, t - dt, g) : style);
     }
-    return { hand, fingers, speed: g.speed, glideDist: g.dist, style, t, lagStyle, wall, wallW };
+    return { hand, fingers, speed: g.speed, glideDist: g.dist, style, t, lagStyle, wall, wallW, sink: this.sink(hand, t) };
+  }
+
+  /** How far into a keystroke the hand has sunk (see HandPose.sink): the strongest recent strike. */
+  private sink(hand: PlayHand, t: number): number {
+    let s = 0;
+    for (let f = 1; f <= 5; f++) {
+      const list = this.presses[hand][f];
+      for (let k = lowerBound(list, t + SINK_IN, 'start') - 1; k >= 0 && list[k].start > t - SINK_OUT; k--) {
+        const p = list[k];
+        s = Math.max(s, smooth((t - (p.start - SINK_IN)) / SINK_IN) * (1 - smooth((t - p.start) / SINK_OUT)));
+      }
+    }
+    return s;
   }
 
   private rawPose(hand: PlayHand, t: number): RawPose {
