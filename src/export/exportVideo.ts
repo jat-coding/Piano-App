@@ -28,6 +28,8 @@ export interface ExportPlan {
   hands?: boolean;
   /** A play-along session: its timeline, hits, score card, and the player's own sound. */
   session?: SessionExport;
+  /** The song's original video is kept, so it can go on top (layout 'video') if the user wants. */
+  canStack?: boolean;
 }
 
 export interface ExportProgress {
@@ -66,12 +68,13 @@ export function planSessionExport(session: SessionExport): ExportPlan {
 
 export function planExport(song: Song, media: SongMedia | null, kind: string | null): ExportPlan {
   const notes: string[] = [];
-  let layout: ExportLayout = 'full';
-  if (media?.kind === 'video') {
-    layout = 'video';
-  } else if (kind === 'video' && !media) {
+  // The original video only goes on top when the user turns it on in the dialog
+  // (plan.canStack says whether that's offered); plain falling notes by default.
+  const layout: ExportLayout = 'full';
+  const canStack = media?.kind === 'video';
+  if (kind === 'video' && !media) {
     notes.push(
-      "This song was added before videos were kept, so the export shows falling notes only. Add the video again to get it on top.",
+      "This song was added before videos were kept, so its original video can't be shown in the export. Add the video again to get that option.",
     );
   }
   let sound: ExportPlan['sound'] = 'original';
@@ -86,7 +89,7 @@ export function planExport(song: Song, media: SongMedia | null, kind: string | n
   const duration = media
     ? Math.max(0.5, media.trimEnd - media.trimStart)
     : song.duration + MIDI_TAIL;
-  return { layout, sound, media, duration, notes };
+  return { layout, sound, media, duration, notes, canStack };
 }
 
 class Cancelled extends Error {
@@ -235,7 +238,22 @@ export async function exportVideo(
   }
   check(signal);
 
-  const renderer = new ExportFrameRenderer(song, layout, plan.hands ?? true, plan.session?.track ?? null);
+  // Size the video band to the recording's shape (see ExportFrameRenderer).
+  let videoAspect: number | undefined;
+  if (video && plan.media) {
+    const first = await video.frameAt(plan.media.trimStart);
+    if (first && first.width > 0 && first.height > 0) {
+      const sideways = first.rotation === 90 || first.rotation === 270;
+      videoAspect = sideways ? first.width / first.height : first.height / first.width;
+    }
+  }
+  const renderer = new ExportFrameRenderer(
+    song,
+    layout,
+    plan.hands ?? true,
+    plan.session?.track ?? null,
+    videoAspect,
+  );
   const totalFrames = Math.max(1, Math.round(plan.duration * FPS));
   const vCodec = force === 'webm' ? null : await pickVideoCodec();
 

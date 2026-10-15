@@ -43,6 +43,8 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const abortRef = useRef<AbortController | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
+  // "Include the original video" (stacked on top). Off by default: plain falling notes.
+  const [stack, setStack] = useState(false);
 
   // Work out layout + sound source from what the library kept for this song.
   useEffect(() => {
@@ -158,8 +160,8 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
                 Vertical video for your phone, {formatTime(phase.plan.duration)} long.
               </li>
               <li>
-                {phase.plan.layout === 'video'
-                  ? 'Your video on top, falling notes below.'
+                {stack && phase.plan.canStack
+                  ? 'Your original video on top, falling notes below, in sync.'
                   : 'Falling notes filling the screen.'}
               </li>
               <li>
@@ -174,6 +176,21 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
               </li>
             </ul>
             )}
+            {!phase.plan.session && phase.plan.canStack && (
+              <div className="toggle-row export-toggle">
+                <span id="export-stack-label">Include the original video (on top)</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={stack}
+                  aria-labelledby="export-stack-label"
+                  className={`switch${stack ? ' on' : ''}`}
+                  onClick={() => setStack(!stack)}
+                >
+                  <span className="knob" />
+                </button>
+              </div>
+            )}
             {phase.plan.notes.map((n) => (
               <p key={n} className="export-note">
                 {n}
@@ -184,7 +201,13 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
               <button className="ghost-btn" onClick={onClose}>
                 Cancel
               </button>
-              <button className="primary-btn" onClick={() => start({ ...phase.plan, hands: showHands })}>
+              <button className="primary-btn" onClick={() =>
+                  start({
+                    ...phase.plan,
+                    layout: stack && phase.plan.canStack ? 'video' : 'full',
+                    hands: showHands,
+                  })
+                }>
                 Make video
               </button>
             </div>

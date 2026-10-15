@@ -1600,6 +1600,16 @@ body,
   font-size: 15px;
   color: var(--text);
 }
+.export-toggle {
+  gap: 12px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.export-toggle .switch {
+  flex: none;
+}
 .export-note {
   margin: 0;
   font-size: 13px;

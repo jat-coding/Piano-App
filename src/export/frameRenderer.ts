@@ -73,6 +73,8 @@ export class ExportFrameRenderer {
     showHands = true,
     /** A play-along session: frames follow its timeline (waits, hits, wrong keys, score). */
     private session: SessionTrack | null = null,
+    /** The source video's upright height / width, when known ('video' layout only). */
+    videoAspect?: number,
   ) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = EXPORT_W;
@@ -90,7 +92,7 @@ export class ExportFrameRenderer {
 
     const footer = 84;
     const handUnit = Math.max(this.whiteW, MIN_HAND_UNIT);
-    this.videoH = layout === 'video' ? EXPORT_H / 2 : 0;
+    this.videoH = layout === 'video' ? videoBandHeight(videoAspect) : 0;
     this.notesTop = this.videoH;
     const kbMin = layout === 'video' ? 150 : 200;
     const kbMax = layout === 'video' ? 240 : 340;
@@ -538,6 +540,18 @@ export class ExportFrameRenderer {
     ctx.fillStyle = '#c2a24a';
     ctx.fillText(this.song.name, EXPORT_W / 2, top + h / 2 + 2, EXPORT_W - 80);
   }
+}
+
+/**
+ * Height of the top band for the original video. A wide (landscape) recording gets
+ * a band of its own shape, so the whole keyboard shows with no side crop; a tall
+ * (portrait) one is capped at half the frame and cropped top/bottom instead, like
+ * the hand-made comparison. Unknown shape: half the frame.
+ */
+export function videoBandHeight(aspect?: number): number {
+  if (!aspect || !Number.isFinite(aspect) || aspect <= 0) return EXPORT_H / 2;
+  const h = Math.min(EXPORT_H / 2, Math.max(EXPORT_H * 0.28, EXPORT_W * aspect));
+  return Math.round(h / 2) * 2;
 }
 
 function lowerBound(notes: NoteEvent[], t: number): number {
