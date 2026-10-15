@@ -46,6 +46,20 @@ assigns a press to — any note with no assigned finger/press is a fail. Don't j
 the visible bar for "a press"; find why the assignment was skipped (fingering.ts /
 handPose assignment logic) and fix the root cause.
 
+## Ambient-noise / false-note check (new, 2026-10-14)
+
+He reported the transcription (Transkun helper) picks up ambient/room noise and turns it
+into played notes that never happened — a backend accuracy gap, not a per-song patch
+(FEEDBACK.md 2026-10-14). Every transcription-pipeline change must also:
+
+1. Feed a silence/ambient-noise-only segment (no real playing — e.g. the lead-in room
+   noise before playing starts in an existing real clip, or a synthesized quiet-noise
+   clip) through the real pipeline and confirm it produces zero or near-zero notes.
+2. Re-run the existing accuracy suite (`projects/amt-eval/` — MAESTRO onset F1, his reel
+   vs the reference video) to confirm the fix didn't cost real-note recall.
+3. Don't special-case the specific song/clip that surfaced this — the fix has to be in
+   the shared noise/confidence gating, not a per-song exception.
+
 ## Preview
 
 - Desktop: `http://localhost:5191/`

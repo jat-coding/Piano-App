@@ -8,7 +8,14 @@ writeFileSync(
   entry,
   `import { rawToSong } from '../src/lib/cleanup';
 import { mergeGhostReonsets } from '../src/lib/reonsets';
+import { dropInaudible } from '../src/lib/noiseGate';
 const n = (midi: number, startTime: number, duration: number, velocity: number) => ({ midi, startTime, duration, velocity, hand: 'right' as const });
+export function noiseGate() {
+  const r = (pitchMidi: number, startTimeSeconds: number, durationSeconds: number, vel: number) => ({ pitchMidi, startTimeSeconds, durationSeconds, amplitude: vel / 127 });
+  // His reel at 41.3 s: a B2 'held' 5 s at velocity 8 under a pedalled chord; plus real pianissimo (19-21) and normal notes.
+  const kept = dropInaudible([r(47, 41.3, 5.06, 8), r(47, 21.4, 4.9, 3), r(52, 9.3, 1.48, 19), r(56, 1, 0.1, 21), r(60, 2, 0.3, 64)]);
+  return kept.map((n) => n.pitchMidi);
+}
 export function reonsets() {
   const cases = {
     // One E ringing under the pedal, cut into fading pieces (Für Elise, 3.0-3.6 s): one note.
@@ -49,7 +56,7 @@ export function run() {
 
 const out = 'scripts/_cleanup-bundle.mjs';
 await build({ entryPoints: [entry], bundle: true, format: 'esm', outfile: out, logLevel: 'silent' });
-const { run, reonsets } = await import(pathToFileURL(process.cwd() + '/' + out).href);
+const { run, reonsets, noiseGate } = await import(pathToFileURL(process.cwd() + '/' + out).href);
 const { auto, fixed, quant } = run();
 const ro = reonsets();
 const want = { ghostChain: 1, together: 2, trill: 8, pair: 2, staccato: 4, louder: 2 };
@@ -77,4 +84,7 @@ console.log(quantOk ? 'PASS: quantize snaps to 1/8 grid' : 'FAIL: quantize');
 
 rmSync(entry);
 rmSync(out);
-process.exit(fixedOk && quantOk && roOk ? 0 : 1);
+const ng = noiseGate();
+const ngOk = ng.join() === '52,56,60';
+console.log(`${ngOk ? 'PASS' : 'FAIL'}: desktop noise gate drops velocity-3/8 phantoms, keeps velocity 19+ (kept ${ng.join(',')})`);
+process.exit(fixedOk && quantOk && roOk && ngOk ? 0 : 1);

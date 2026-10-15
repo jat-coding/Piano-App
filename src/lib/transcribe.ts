@@ -1,4 +1,5 @@
 import type { CleanupParams, RawNote } from './transcribe.worker';
+import { dropInaudible } from './noiseGate';
 
 export type { CleanupParams, RawNote };
 
@@ -142,7 +143,7 @@ async function transcribeOnDesktop(audio44: Float32Array): Promise<TranscribeRes
       console.warn('Desktop engine reply had no usable notes; using the on-device engine');
       return null;
     }
-    return { notes: body.notes, engine: 'transkun', device: body.device, pedals: body.pedals };
+    return { notes: dropInaudible(body.notes), engine: 'transkun', device: body.device, pedals: body.pedals };
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError' && !timedOut) throw err; // user cancel
     console.warn('Desktop engine unreachable; using the on-device engine', err);
