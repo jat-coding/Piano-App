@@ -169,8 +169,7 @@ export class Renderer {
   }
 
   /**
-   * Keep the keyboard and hands clear of whatever overlays the canvas edges: the
-   * control bar at the bottom, and the safe areas (notch, home indicator).
+   * Keep the keyboard and hands clear of the safe areas (notch, home indicator).
    */
   setInsets(insets: StageInsets): void {
     const i = this.insets;
@@ -291,7 +290,7 @@ export class Renderer {
       kbH: this.keyboardHeight,
       blackH: this.keyboardHeight * 0.62,
       pixelRatio: this.dpr,
-      // The control bar overlays the canvas below the hand room: the wrists fade out above it.
+      // The wrists fade out at the bottom of the hand room (the bottom safe-area edge).
       floorY: this.strikeY + this.keyboardHeight + this.handRoom,
     };
     drawHands(ctx, this.hands, currentTime, g, { left: this.opts.showLeft, right: this.opts.showRight });
