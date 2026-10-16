@@ -5,6 +5,18 @@ import { DEFAULT_CLEANUP } from './lib/transcribe';
 import type { BuildOptions } from './lib/cleanup';
 import { DEFAULT_BUILD } from './lib/cleanup';
 import type { SongKind } from './lib/library';
+import type { ViewStyle } from './render/perspective';
+
+const VIEW_STYLE_KEY = 'cascade.viewStyle';
+
+/** The saved view style; Classic unless Perspective was picked before. */
+function loadViewStyle(): ViewStyle {
+  try {
+    return localStorage.getItem(VIEW_STYLE_KEY) === 'perspective' ? 'perspective' : 'classic';
+  } catch {
+    return 'classic';
+  }
+}
 
 /**
  * MIDI keyboard practice modes:
@@ -54,6 +66,8 @@ interface AppState {
   impacts: boolean;
   showHands: boolean;
   fallSpeed: number; // pixels per second
+  /** Falling-note view style (Home → Profile); persisted in localStorage. */
+  viewStyle: ViewStyle;
   showSettings: boolean;
   practiceMode: PracticeMode;
   waiting: boolean;
@@ -98,6 +112,7 @@ interface AppState {
   setImpacts: (v: boolean) => void;
   setShowHands: (v: boolean) => void;
   setFallSpeed: (v: number) => void;
+  setViewStyle: (v: ViewStyle) => void;
   setShowSettings: (v: boolean) => void;
   setPracticeMode: (v: PracticeMode) => void;
   setWaiting: (v: boolean) => void;
@@ -143,6 +158,7 @@ export const useStore = create<AppState>((set) => ({
   impacts: true,
   showHands: true,
   fallSpeed: 220,
+  viewStyle: loadViewStyle(),
   showSettings: false,
   practiceMode: 'off',
   waiting: false,
@@ -193,6 +209,14 @@ export const useStore = create<AppState>((set) => ({
   setImpacts: (impacts) => set({ impacts }),
   setShowHands: (showHands) => set({ showHands }),
   setFallSpeed: (fallSpeed) => set({ fallSpeed }),
+  setViewStyle: (viewStyle) => {
+    try {
+      localStorage.setItem(VIEW_STYLE_KEY, viewStyle);
+    } catch {
+      /* private mode: keep it for this session only */
+    }
+    set({ viewStyle });
+  },
   setShowSettings: (showSettings) => set({ showSettings }),
   setPracticeMode: (practiceMode) => set({ practiceMode, waiting: false, expected: [] }),
   setWaiting: (waiting) => set({ waiting }),

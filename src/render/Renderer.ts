@@ -3,6 +3,7 @@ import { computeKeyboard, indexKeys, isBlackKey, type KeyGeometry } from './keyb
 import { HandAnimator } from '../hands/handPose';
 import { drawHands, type HandGeometry } from '../hands/drawHands';
 import { keyU } from '../hands/fingering';
+import * as P from './perspective';
 
 /** Cascade palette — keep in sync with :root in index.css (the video export reuses it). */
 export const COLORS = {
@@ -58,6 +59,8 @@ export interface RenderOptions {
   glow: boolean;
   impacts: boolean;
   showHands: boolean;
+  /** 'perspective' = lanes recede to a vanishing point, with a floor reflection. */
+  viewStyle: P.ViewStyle;
 }
 
 interface Particle {
@@ -88,6 +91,10 @@ export class Renderer {
   private whiteW = 0;
   private handRoom = 0;
   private laidOutHands = false;
+  private laidOutStyle: P.ViewStyle = 'classic';
+  // Perspective view: projection for the note field, and the reflection strip under the hands.
+  private persp: P.Perspective | null = null;
+  private reflH = 0;
   private insets: StageInsets = { left: 0, right: 0, bottom: 0 };
   // Fingering + hand poses for the current song, built the first time hands are drawn.
   private hands: HandAnimator | null = null;
@@ -99,6 +106,7 @@ export class Renderer {
     glow: true,
     impacts: true,
     showHands: true,
+    viewStyle: 'classic',
   };
 
   // Impact particles (own wall clock so they don't warp with seek/speed).
@@ -205,13 +213,18 @@ export class Renderer {
     this.handRoom = this.opts.showHands ? Math.round(Math.max(14, Math.min(110, unit * 3))) : 0;
     // Everything sits above the control bar, which overlays the bottom of the canvas.
     const bottom = Math.min(insets.bottom, cssH * 0.45);
-    this.strikeY = cssH - bottom - this.keyboardHeight - this.handRoom;
+    // Perspective: keep a strip under the hands for the floor reflection.
+    this.laidOutStyle = this.opts.viewStyle;
+    const persp = this.opts.viewStyle === 'perspective';
+    this.reflH = persp ? Math.round((cssH - bottom) * P.REFLECTION_FRACTION) : 0;
+    this.strikeY = cssH - bottom - this.keyboardHeight - this.handRoom - this.reflH;
+    this.persp = persp ? P.makePerspective(cssW, 0, this.strikeY) : null;
   }
 
   /** Draw one frame at the given transport time (seconds). */
   draw(currentTime: number): void {
     const { ctx, cssW, cssH } = this;
-    if (this.opts.showHands !== this.laidOutHands) this.layout();
+    if (this.opts.showHands !== this.laidOutHands || this.opts.viewStyle !== this.laidOutStyle) this.layout();
     const now = performance.now() / 1000;
     const dt = this.lastWall ? Math.min(now - this.lastWall, 0.05) : 0;
     this.lastWall = now;
@@ -236,6 +249,7 @@ export class Renderer {
     pool.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = pool;
     ctx.fillRect(0, 0, cssW, this.strikeY);
+    if (this.persp) P.drawVanishingGlow(ctx, this.persp, cssW);
 
     this.drawOctaveGuides();
 
@@ -254,6 +268,10 @@ export class Renderer {
     if (this.opts.impacts) this.updateAndDrawParticles(dt);
     this.drawKeyboard(active);
     if (this.opts.showHands) this.drawHandLayer(currentTime);
+    if (this.persp) {
+      const floor = this.strikeY + this.keyboardHeight + this.handRoom;
+      P.drawReflection(ctx, this.canvas, this.dpr, cssW, this.strikeY, floor - this.strikeY, floor, this.reflH, COLORS.bgTop);
+    }
   }
 
   private drawHandLayer(currentTime: number): void {
@@ -324,6 +342,11 @@ export class Renderer {
 
   private drawOctaveGuides(): void {
     const { ctx } = this;
+    if (this.persp) {
+      const xs = this.keys.filter((k) => !k.black && k.midi % 12 === 0).map((k) => Math.round(k.x) + 0.5);
+      P.drawLaneGuides(ctx, this.persp, xs, 'rgba(194,162,74,0.16)', 1);
+      return;
+    }
     ctx.strokeStyle = COLORS.guide;
     ctx.lineWidth = 1;
     for (const key of this.keys) {
@@ -345,7 +368,8 @@ export class Renderer {
     // With hands shown, a note's tail after its finger lets go is drawn as held by the pedal.
     const hands = this.opts.showHands ? this.hands : null;
 
-    const visibleAhead = this.strikeY / pps; // seconds of lookahead on screen
+    const persp = this.persp;
+    const visibleAhead = (persp ? P.maxDist(persp) : this.strikeY) / pps; // seconds of lookahead on screen
     const maxLookback = 12; // seconds — covers long sustained notes
 
     // Binary search: first note with startTime >= currentTime - maxLookback.
@@ -366,7 +390,7 @@ export class Renderer {
       const bottomY = this.strikeY - (n.startTime - currentTime) * pps;
       const height = Math.max(n.duration * pps, 3);
       const topY = bottomY - height;
-      if (topY > this.strikeY || bottomY < 0) continue;
+      if (topY > this.strikeY || (!persp && bottomY < 0)) continue;
 
       const end = n.startTime + n.duration;
       const sus = hands ? hands.sustainFrom(i) : Infinity;
@@ -383,6 +407,10 @@ export class Renderer {
       const black = isBlackKey(n.midi);
       const w = key.w * (black ? 1 : 0.9);
       const x = key.cx - w / 2;
+      if (persp) {
+        this.drawPerspectiveBar(persp, n.startTime - currentTime, n.duration, sus - currentTime, sus >= end, x, w, hand, black);
+        continue;
+      }
       const drawTop = Math.max(topY, 0);
       const drawBottom = Math.min(bottomY, this.strikeY);
       if (drawBottom - drawTop <= 0) continue;
@@ -419,6 +447,50 @@ export class Renderer {
     }
 
     return active;
+  }
+
+  /** One note bar in the perspective view: the same colours, projected toward the vanishing point. */
+  private drawPerspectiveBar(
+    p: P.Perspective,
+    ahead: number,
+    duration: number,
+    susAhead: number,
+    noSus: boolean,
+    x: number,
+    w: number,
+    hand: Hand,
+    black: boolean,
+  ): void {
+    const { ctx } = this;
+    const pps = this.opts.pixelsPerSecond;
+    const far = P.maxDist(p);
+    const dNear = Math.max(0, ahead * pps);
+    const dFar = Math.min(far, ahead * pps + Math.max(duration * pps, 3));
+    if (dFar <= dNear) return;
+    // Hollow from where the finger lets go (the pedal holds the rest).
+    const dSus = noSus ? dFar : Math.max(dNear, Math.min(dFar, susAhead * pps));
+    if (dSus < dFar) {
+      const rgb = handRgb(hand);
+      P.traceBar(ctx, p, x, x + w, dSus, dFar);
+      ctx.fillStyle = `rgba(${rgb},0.2)`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb},0.9)`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    if (dSus <= dNear) return;
+    const fill = noteColor(hand, black);
+    P.traceBar(ctx, p, x, x + w, dNear, dSus);
+    if (this.opts.glow) {
+      ctx.shadowColor = fill;
+      ctx.shadowBlur = 5;
+    }
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
   private drawStrikeLine(): void {

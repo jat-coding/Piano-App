@@ -113,6 +113,7 @@ export function Player() {
       renderer.opts.impacts = st.impacts && !reduceMotion;
       renderer.opts.showHands = st.showHands;
       renderer.opts.pixelsPerSecond = st.fallSpeed;
+      renderer.opts.viewStyle = st.viewStyle;
 
       scrubRef.current?.step(performance.now() / 1000, st.duration);
       // Play along: listen, and move the song on from what was heard, before the tick.
