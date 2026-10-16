@@ -275,6 +275,34 @@ body,
   line-height: 1.6;
 }
 
+/* ---------- Profile (Home) ---------- */
+.profile-btn {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.profile-btn:hover {
+  border-color: var(--brass);
+}
+.view-hint {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.75;
+}
+.chooser-remove.profile-done {
+  color: var(--brass);
+}
+
 /* ---------- Song chooser popup ---------- */
 .chooser-backdrop {
   position: absolute;

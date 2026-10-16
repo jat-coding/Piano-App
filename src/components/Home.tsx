@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import { listSongs, deleteSong, type SavedSongMeta } from '../lib/library';
 import { loadFile, loadSavedSong } from '../lib/pipeline';
 import { formatTime } from '../lib/format';
-import { PlayIcon, MusicIcon, TrashIcon } from './icons';
+import { PlayIcon, MusicIcon, TrashIcon, ProfileIcon, ClassicViewIcon, PerspectiveViewIcon } from './icons';
 
 /** Deterministic pseudo-random from a string, so a song's mock sheet is stable. */
 function seeded(str: string): () => number {
@@ -63,6 +63,9 @@ export function Home() {
   const setParseError = useStore((s) => s.setParseError);
   const [songs, setSongs] = useState<SavedSongMeta[]>([]);
   const [chosen, setChosen] = useState<SavedSongMeta | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const viewStyle = useStore((s) => s.viewStyle);
+  const setViewStyle = useStore((s) => s.setViewStyle);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -80,6 +83,10 @@ export function Home() {
       <header className="home-head">
         <h1 className="wordmark">Cascade</h1>
         <p className="home-sub">Your music rack — swipe to choose a piece to learn</p>
+        <button className="profile-btn" onClick={() => setProfileOpen(true)} aria-label="Profile">
+          <ProfileIcon size={20} />
+          <span>Profile</span>
+        </button>
       </header>
 
       {parseError && (
@@ -127,6 +134,40 @@ export function Home() {
           e.target.value = '';
         }}
       />
+
+      {profileOpen && (
+        <div className="chooser-backdrop" onClick={() => setProfileOpen(false)}>
+          <div className="chooser" role="dialog" aria-label="Profile" onClick={(e) => e.stopPropagation()}>
+            <h2>Profile</h2>
+            <p className="chooser-sub">View style for falling notes and exported videos</p>
+            <div className="chooser-actions" role="radiogroup" aria-label="View style">
+              <button
+                role="radio"
+                aria-checked={viewStyle === 'classic'}
+                className={`chooser-btn${viewStyle === 'classic' ? ' primary' : ''}`}
+                onClick={() => setViewStyle('classic')}
+              >
+                <ClassicViewIcon size={22} />
+                <span>Classic</span>
+                <span className="view-hint">Straight falling lanes</span>
+              </button>
+              <button
+                role="radio"
+                aria-checked={viewStyle === 'perspective'}
+                className={`chooser-btn${viewStyle === 'perspective' ? ' primary' : ''}`}
+                onClick={() => setViewStyle('perspective')}
+              >
+                <PerspectiveViewIcon size={22} />
+                <span>Perspective</span>
+                <span className="view-hint">Lanes into the distance, reflection</span>
+              </button>
+            </div>
+            <button className="chooser-remove profile-done" onClick={() => setProfileOpen(false)}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
 
       {chosen && (
         <div className="chooser-backdrop" onClick={() => setChosen(null)}>

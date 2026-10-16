@@ -154,3 +154,27 @@ export const ExportVideoIcon = (p: IconProps) => (
     <path d="M12 8v7M9.5 12.5 12 15l2.5-2.5" />
   </Stroke>
 );
+
+/** Head and shoulders — "Profile". */
+export const ProfileIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+  </Stroke>
+);
+
+/** Parallel falling lanes over a keyboard — the Classic view. */
+export const ClassicViewIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M6 3v13M12 3v13M18 3v13" />
+    <rect x="2" y="17" width="20" height="4" rx="1" />
+  </Stroke>
+);
+
+/** Lanes converging to a vanishing point over a keyboard — the Perspective view. */
+export const PerspectiveViewIcon = (p: IconProps) => (
+  <Stroke {...p}>
+    <path d="M12 2 4 16M12 2v14M12 2l8 14" />
+    <rect x="2" y="17" width="20" height="4" rx="1" />
+  </Stroke>
+);
