@@ -211,7 +211,7 @@ export class Renderer {
     this.laidOutHands = this.opts.showHands;
     const unit = Math.max(this.whiteW, MIN_HAND_UNIT);
     this.handRoom = this.opts.showHands ? Math.round(Math.max(14, Math.min(110, unit * 3))) : 0;
-    // Everything sits above the control bar, which overlays the bottom of the canvas.
+    // Everything sits above the bottom safe area (home indicator).
     const bottom = Math.min(insets.bottom, cssH * 0.45);
     // Perspective: keep a strip under the hands for the floor reflection.
     this.laidOutStyle = this.opts.viewStyle;

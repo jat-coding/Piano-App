@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Renderer } from '../render/Renderer';
 import { PlaybackEngine } from '../audio/playback';
 import { useStore } from '../store';
-import { Controls } from './Controls';
-import { Scrubber } from './Scrubber';
 import { Settings } from './Settings';
 import { MidiInput } from '../lib/midiInput';
 import { RotateIcon } from './icons';
@@ -23,7 +21,6 @@ function isMobile(): boolean {
 export function Player() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const barRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const engineRef = useRef<PlaybackEngine>(new PlaybackEngine());
@@ -65,18 +62,16 @@ export function Player() {
     rendererRef.current = renderer;
     const engine = engineRef.current;
 
-    // Keep the keyboard and hands above the control bar and inside the safe areas
-    // (notch, home indicator). offsetTop ignores the bar's hide/show transform, so
-    // the keyboard doesn't jump when the controls auto-hide.
+    // Keep the keyboard and hands inside the safe areas (notch, home indicator).
+    // There is no bottom bar: transport lives in the gear dropdown and on the notes.
     const applyInsets = () => {
-      const bar = barRef.current;
       const probe = probeRef.current;
       const cs = probe ? getComputedStyle(probe) : null;
       const px = (v: string | undefined) => parseFloat(v ?? '') || 0;
       renderer.setInsets({
         left: px(cs?.paddingLeft),
         right: px(cs?.paddingRight),
-        bottom: bar ? container.clientHeight - bar.offsetTop : px(cs?.paddingBottom),
+        bottom: px(cs?.paddingBottom),
       });
     };
     const ro = new ResizeObserver(() => {
@@ -85,7 +80,6 @@ export function Player() {
       renderer.resize(r.width, r.height);
     });
     ro.observe(container);
-    if (barRef.current) ro.observe(barRef.current);
     const r0 = container.getBoundingClientRect();
     applyInsets();
     renderer.resize(r0.width, r0.height);
@@ -207,15 +201,6 @@ export function Player() {
     }
     poke();
   }, [setPlaying, poke, goFullscreenLandscape]);
-
-  const seek = useCallback(
-    (t: number) => {
-      scrubRef.current?.stop();
-      engineRef.current.seek(t);
-      setCurrentTime(engineRef.current.songTime);
-    },
-    [setCurrentTime],
-  );
 
   const skip = useCallback((delta: number) => {
     const e = engineRef.current;
@@ -413,20 +398,14 @@ export function Player() {
       {loadingAudio && <div className="audio-loading">Loading piano…</div>}
       {waiting && !playAlong && <div className="wait-hint">Waiting — play the green keys (tap or MIDI)</div>}
 
-      <Settings onToggleMidi={toggleMidi} />
-
-      <div ref={barRef} className="bottom-bar">
-        <Scrubber onSeek={seek} />
-        <Controls
-          onPlayPause={playPause}
-          onSkip={skip}
-          onRate={changeRate}
-          onSetLoopA={setLoopAtA}
-          onSetLoopB={setLoopAtB}
-          onExport={openExport}
-          onPlayAlong={openPlayAlong}
-        />
-      </div>
+      <Settings
+        onToggleMidi={toggleMidi}
+        onRate={changeRate}
+        onSetLoopA={setLoopAtA}
+        onSetLoopB={setLoopAtB}
+        onExport={openExport}
+        onPlayAlong={openPlayAlong}
+      />
 
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
 

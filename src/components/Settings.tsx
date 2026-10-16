@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react';
 import { useStore, type PracticeMode } from '../store';
 import { midiSupported } from '../lib/midiInput';
 import { CleanupSection } from './CleanupSection';
-import { CloseIcon, SettingsIcon } from './icons';
+import { formatTime } from '../lib/format';
+import { CloseIcon, ExportVideoIcon, MicIcon, SettingsIcon } from './icons';
 
 const MODES: { value: PracticeMode; label: string; hint: string }[] = [
   { value: 'off', label: 'Off', hint: 'Song plays normally.' },
@@ -10,8 +11,15 @@ const MODES: { value: PracticeMode; label: string; hint: string }[] = [
   { value: 'wait', label: 'Wait', hint: 'Song holds on each note until you play it.' },
 ];
 
+const SPEED_PRESETS = [0.5, 0.75, 1, 1.5];
+
 interface Props {
   onToggleMidi: (enabled: boolean) => void;
+  onRate: (r: number) => void;
+  onSetLoopA: () => void;
+  onSetLoopB: () => void;
+  onExport: () => void;
+  onPlayAlong: () => void;
 }
 
 function Toggle({
@@ -33,7 +41,7 @@ function Toggle({
   );
 }
 
-export function Settings({ onToggleMidi }: Props) {
+export function Settings({ onToggleMidi, onRate, onSetLoopA, onSetLoopB, onExport, onPlayAlong }: Props) {
   const show = useStore((s) => s.showSettings);
   const setShow = useStore((s) => s.setShowSettings);
   const glow = useStore((s) => s.glow);
@@ -48,6 +56,13 @@ export function Settings({ onToggleMidi }: Props) {
   const setPracticeMode = useStore((s) => s.setPracticeMode);
   const midiEnabled = useStore((s) => s.midiEnabled);
   const midiDevices = useStore((s) => s.midiDevices);
+  const rate = useStore((s) => s.rate);
+  const showLeft = useStore((s) => s.showLeft);
+  const showRight = useStore((s) => s.showRight);
+  const toggleHand = useStore((s) => s.toggleHand);
+  const loopA = useStore((s) => s.loopA);
+  const loopB = useStore((s) => s.loopB);
+  const clearLoop = useStore((s) => s.clearLoop);
 
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -90,7 +105,82 @@ export function Settings({ onToggleMidi }: Props) {
           </button>
         </div>
 
-        <div className="settings-section first">Playback</div>
+        <div className="settings-section first">Song</div>
+
+        <label className="field">
+          <span>
+            Speed: <b>{rate.toFixed(2)}×</b>
+          </span>
+          <input
+            type="range"
+            min={0.25}
+            max={2}
+            step={0.05}
+            value={rate}
+            onChange={(e) => onRate(parseFloat(e.target.value))}
+          />
+        </label>
+        <div className="settings-row">
+          {SPEED_PRESETS.map((p) => (
+            <button
+              key={p}
+              className={`mini${Math.abs(rate - p) < 0.001 ? ' active' : ''}`}
+              onClick={() => onRate(p)}
+            >
+              {p}×
+            </button>
+          ))}
+        </div>
+
+        <div className="settings-loop">
+          <span>
+            A–B loop:{' '}
+            <b>
+              {loopA == null && loopB == null
+                ? 'off'
+                : `${loopA != null ? formatTime(loopA) : '…'} – ${loopB != null ? formatTime(loopB) : 'end'}`}
+            </b>
+          </span>
+          <div className="settings-row">
+            <button className={`mini${loopA != null ? ' active' : ''}`} onClick={onSetLoopA}>
+              Set A here
+            </button>
+            <button className={`mini${loopB != null ? ' active' : ''}`} onClick={onSetLoopB}>
+              Set B here
+            </button>
+            {(loopA != null || loopB != null) && (
+              <button className="mini" onClick={clearLoop}>
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        <Toggle label="Left hand notes" value={showLeft} onChange={() => toggleHand('left')} />
+        <Toggle label="Right hand notes" value={showRight} onChange={() => toggleHand('right')} />
+
+        <div className="settings-row">
+          <button
+            className="ghost-btn small"
+            onClick={() => {
+              setShow(false);
+              onPlayAlong();
+            }}
+          >
+            <MicIcon size={15} /> Play along
+          </button>
+          <button
+            className="ghost-btn small"
+            onClick={() => {
+              setShow(false);
+              onExport();
+            }}
+          >
+            <ExportVideoIcon size={15} /> Export video
+          </button>
+        </div>
+
+        <div className="settings-section">Playback</div>
 
         <Toggle label="Strike glow" value={glow} onChange={setGlow} />
         <Toggle label="Impact effects" value={impacts} onChange={setImpacts} />

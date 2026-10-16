@@ -571,22 +571,6 @@ body,
   border-color: var(--orange);
 }
 
-/* ---------- Bottom bar (auto-hide) ---------- */
-.bottom-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 12px calc(16px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom))
-    calc(16px + env(safe-area-inset-left));
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transition: opacity 0.3s, transform 0.3s;
-  z-index: 20;
-}
-.player.ui-hidden .bottom-bar,
 .player.ui-hidden .back-btn,
 .player.ui-hidden .settings-btn:not(.open) {
   opacity: 0;
@@ -597,182 +581,6 @@ body,
   opacity: 0;
   transform: translate(-50%, 8px);
   pointer-events: none;
-}
-
-/* ---------- Scrubber ----------
-   Slim backup: dragging the notes is the main way to move through a song, so the
-   bar draws as a hairline. The track keeps a 24px-tall touch area. */
-.scrubber {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  opacity: 0.75;
-}
-.time {
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: var(--muted);
-  min-width: 34px;
-  text-align: center;
-}
-.scrub-track {
-  position: relative;
-  flex: 1;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  touch-action: none;
-}
-.minimap {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 10px;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  opacity: 0.2;
-}
-.minimap span {
-  flex: 1;
-  background: linear-gradient(var(--orange), var(--blue));
-  border-radius: 1px;
-  min-height: 8%;
-}
-.scrub-track::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-}
-.scrub-fill {
-  position: absolute;
-  left: 0;
-  height: 2px;
-  background: linear-gradient(90deg, var(--brass-deep, #8a6d2f), var(--brass));
-  border-radius: 999px;
-  pointer-events: none;
-}
-.scrub-handle {
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--brass-soft);
-  box-shadow: 0 0 4px rgba(194, 162, 74, 0.5), 0 0 0 1px rgba(120, 96, 36, 0.6);
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-
-/* ---------- Controls ---------- */
-.controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.controls-left,
-.controls-right,
-.controls-center {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.controls-center {
-  flex: 1;
-  justify-content: center;
-  min-width: 200px;
-}
-.ctrl-btn {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  font-size: 16px;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: border-color 0.15s, background 0.15s;
-}
-.ctrl-btn:hover {
-  border-color: var(--orange);
-}
-.ctrl-btn.play {
-  width: 50px;
-  height: 50px;
-  font-size: 20px;
-  background: linear-gradient(180deg, var(--brass-soft), var(--brass));
-  color: #1c160a;
-  border: 1px solid rgba(120, 96, 36, 0.5);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-}
-.ctrl-btn.small {
-  width: 34px;
-  height: 34px;
-  font-size: 14px;
-}
-.ctrl-btn.small.on {
-  border-color: var(--orange);
-  background: rgba(255, 140, 43, 0.18);
-}
-.speed-label {
-  font-variant-numeric: tabular-nums;
-  font-size: 13px;
-  color: var(--muted);
-  min-width: 44px;
-}
-.speed-slider {
-  width: 140px;
-  accent-color: var(--orange);
-}
-.presets {
-  display: flex;
-  gap: 4px;
-}
-.preset {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  padding: 4px 8px;
-  border-radius: 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.preset.active {
-  border-color: var(--orange);
-  color: var(--text);
-  background: rgba(255, 140, 43, 0.15);
-}
-.hand-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  font-weight: 700;
-  font-size: 15px;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--muted);
-  transition: all 0.15s;
-}
-.hand-btn.left.on {
-  border-color: var(--blue);
-  color: #fff;
-  background: rgba(43, 155, 255, 0.22);
-}
-.hand-btn.right.on {
-  border-color: var(--orange);
-  color: #fff;
-  background: rgba(255, 140, 43, 0.22);
 }
 
 /* ---------- Rotate overlay ---------- */
@@ -977,47 +785,6 @@ body,
   font-size: 12px;
 }
 
-/* ---------- A–B loop ---------- */
-.loop-group {
-  display: flex;
-  gap: 3px;
-}
-.loop-btn {
-  width: 30px;
-  height: 34px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.loop-btn.set {
-  border-color: var(--sage);
-  color: var(--text);
-  background: rgba(167, 184, 106, 0.18);
-}
-.loop-btn.clear {
-  color: #ff6b6b;
-  font-weight: 400;
-}
-.loop-region {
-  position: absolute;
-  height: 4px;
-  background: rgba(167, 184, 106, 0.32);
-  pointer-events: none;
-}
-.loop-marker {
-  position: absolute;
-  top: -14px;
-  transform: translateX(-50%);
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--sage);
-  pointer-events: none;
-}
-
 /* ---------- Wait-mode hint ---------- */
 .wait-hint {
   position: absolute;
@@ -1071,7 +838,7 @@ body,
   right: calc(16px + env(safe-area-inset-right));
   z-index: 30;
   width: min(340px, calc(100vw - 32px));
-  max-height: calc(100% - 150px); /* stops above the transport bar */
+  max-height: calc(100% - 150px); /* keeps the keyboard in view below it */
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--panel);
@@ -1178,24 +945,25 @@ body,
   color: #1a1206;
 }
 
-/* Practice-mode button in the controls bar (icon + optional label). */
-.ctrl-btn.mode {
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.settings-row .ghost-btn {
   display: inline-flex;
   align-items: center;
-  width: auto;
-  min-width: 40px;
-  height: 40px;
-  padding: 0 12px;
   gap: 6px;
-  border-radius: 999px;
+  cursor: pointer;
 }
-.ctrl-btn.mode.on {
-  border-color: var(--orange);
-  background: rgba(255, 140, 43, 0.18);
+.settings-loop {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
 }
-.mode-label {
-  font-size: 12px;
-  font-weight: 600;
+.settings-loop b {
+  font-variant-numeric: tabular-nums;
 }
 .settings-hint {
   font-size: 12px;
@@ -1284,21 +1052,6 @@ body,
 .lib-del:hover {
   color: #ff6b6b;
   border-color: #ff6b6b;
-}
-
-@media (max-width: 640px) {
-  .presets {
-    display: none;
-  }
-  .speed-slider {
-    width: 90px;
-  }
-  .controls-center {
-    min-width: 0;
-  }
-  .loop-marker {
-    top: -12px;
-  }
 }
 
 /* ---------- Trim dialog ---------- */
@@ -1454,9 +1207,6 @@ body,
 
 /* ---------- Accessibility: touch targets on finger devices ---------- */
 @media (pointer: coarse) {
-  .loop-btn,
-  .hand-btn,
-  .preset,
   .mini,
   .seg,
   .lib-del,
@@ -1513,19 +1263,11 @@ body,
   }
 }
 
-/* ---------- Phones: the speed presets don't fit beside 44px touch targets ----------
-   (they overlapped the loop and hand buttons in iPhone landscape; the slider still sets speed) */
-@media (pointer: coarse) and (max-width: 900px) {
-  .presets {
-    display: none;
-  }
-}
-
 /* ---------- Short viewports (phone landscape): keep dialogs from overflowing ---------- */
 @media (max-height: 480px) {
-  .bottom-bar {
-    padding-top: 6px;
-    gap: 4px;
+  /* No bottom bar any more: the dropdown can use the height, scrolling past that. */
+  .settings-dropdown {
+    max-height: calc(100% - 72px);
   }
   .trim-card {
     padding: 16px;
@@ -1652,11 +1394,6 @@ body,
 }
 
 /* ---------- Play along ---------- */
-.player.playing-along .bottom-bar {
-  /* Hidden but still laid out, so the keyboard keeps its place above it. */
-  visibility: hidden;
-  pointer-events: none;
-}
 .play-card {
   width: min(440px, 92vw);
 }
