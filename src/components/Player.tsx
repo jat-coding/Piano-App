@@ -4,7 +4,6 @@ import { PlaybackEngine } from '../audio/playback';
 import { useStore } from '../store';
 import { Controls } from './Controls';
 import { Scrubber } from './Scrubber';
-import { CleanupPanel } from './CleanupPanel';
 import { Settings } from './Settings';
 import { MidiInput } from '../lib/midiInput';
 import { RotateIcon } from './icons';
@@ -413,7 +412,6 @@ export function Player() {
       {loadingAudio && <div className="audio-loading">Loading piano…</div>}
       {waiting && !playAlong && <div className="wait-hint">Waiting — play the green keys (tap or MIDI)</div>}
 
-      <CleanupPanel />
       <Settings onToggleMidi={toggleMidi} />
 
       <div ref={barRef} className="bottom-bar">

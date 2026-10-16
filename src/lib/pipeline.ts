@@ -110,7 +110,7 @@ export async function loadFile(file: File): Promise<void> {
       }
       s.setRaw(null, ''); // clear any prior transcription (hides cleanup panel)
       s.setRawSource(null, null);
-      s.setShowCleanup(false);
+      s.setShowSettings(false);
       s.setSong(song);
       s.setView('player');
       persist(song, 'midi');
@@ -224,7 +224,6 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
     }
     s2.setRaw(result.notes, name);
     rebuild();
-    useStore.getState().setShowCleanup(true);
     useStore.getState().setView('player');
     const built = useStore.getState().song;
     if (built) persist(built, kind, file ? { file, trimStart, trimEnd } : undefined);
@@ -246,7 +245,7 @@ export async function loadSavedSong(id: string): Promise<void> {
   const s = useStore.getState();
   s.setRaw(null, ''); // saved songs are already cleaned up
   s.setRawSource(null, null);
-  s.setShowCleanup(false);
+  s.setShowSettings(false);
   s.setCurrentSavedId(id);
   s.setSong(song);
   await touchSong(id); // mark as just practiced → moves to the front

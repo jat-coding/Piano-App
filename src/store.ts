@@ -40,7 +40,6 @@ interface AppState {
   stage: string;
   cleanup: CleanupParams; // worker-side thresholds
   build: BuildOptions; // main-side split + quantize
-  showCleanup: boolean;
 
   // ---- trim step: decoded audio awaiting the user's clip selection ----
   pendingAudio: Float32Array | null;
@@ -84,7 +83,6 @@ interface AppState {
   setDesktopMinLen: (ms: number) => void;
   setCleanup: (partial: Partial<CleanupParams>) => void;
   setBuild: (partial: Partial<BuildOptions>) => void;
-  setShowCleanup: (v: boolean) => void;
   setPending: (
     audio: Float32Array,
     name: string,
@@ -133,7 +131,6 @@ export const useStore = create<AppState>((set) => ({
   stage: '',
   cleanup: { ...DEFAULT_CLEANUP },
   build: { ...DEFAULT_BUILD },
-  showCleanup: false,
 
   pendingAudio: null,
   pendingName: '',
@@ -185,7 +182,6 @@ export const useStore = create<AppState>((set) => ({
   setDesktopMinLen: (desktopMinLenMs) => set({ desktopMinLenMs }),
   setCleanup: (partial) => set((s) => ({ cleanup: { ...s.cleanup, ...partial } })),
   setBuild: (partial) => set((s) => ({ build: { ...s.build, ...partial } })),
-  setShowCleanup: (showCleanup) => set({ showCleanup }),
   setPending: (pendingAudio, pendingName, pendingKind, pendingDuration, pendingFile) =>
     set({ pendingAudio, pendingName, pendingKind, pendingDuration, pendingFile }),
   clearPending: () =>

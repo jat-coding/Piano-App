@@ -3,18 +3,15 @@ import { updateBuild, updateCleanup, updateDesktopMinLength } from '../lib/pipel
 import { ENGINE_LABEL } from '../lib/transcribe';
 import { MIN_MIDI, MAX_MIDI } from '../types';
 import type { Quantize } from '../lib/cleanup';
-import { SlidersIcon, CloseIcon } from './icons';
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 function midiName(m: number): string {
   return `${NOTE_NAMES[m % 12]}${Math.floor(m / 12) - 1}`;
 }
 
-/** Tuning panel shown for transcribed (audio/video) songs. */
-export function CleanupPanel() {
+/** Cleanup section of the settings dropdown, shown for transcribed (audio/video) songs. */
+export function CleanupSection() {
   const rawNotes = useStore((s) => s.rawNotes);
-  const show = useStore((s) => s.showCleanup);
-  const setShow = useStore((s) => s.setShowCleanup);
   const build = useStore((s) => s.build);
   const cleanup = useStore((s) => s.cleanup);
   const transcribing = useStore((s) => s.transcribing);
@@ -25,26 +22,15 @@ export function CleanupPanel() {
 
   if (!rawNotes) return null;
 
-  if (!show) {
-    return (
-      <button className="cleanup-toggle" onClick={() => setShow(true)} title="Cleanup & hands">
-        <SlidersIcon size={16} /> Tune
-      </button>
-    );
-  }
-
   const splitMidi = build.splitMidi ?? 60;
 
   return (
-    <div className="cleanup-panel">
-      <div className="cleanup-head">
+    <>
+      <div className="settings-section cleanup-head">
         <span>Cleanup &amp; hands</span>
         <div className="cleanup-head-right">
           {transcribing && <span className="updating">updating…</span>}
           <span className="note-count">{noteCount} notes</span>
-          <button className="x" onClick={() => setShow(false)} aria-label="Close cleanup panel">
-            <CloseIcon size={18} />
-          </button>
         </div>
       </div>
 
@@ -156,6 +142,6 @@ export function CleanupPanel() {
           )}
         </div>
       </label>
-    </div>
+    </>
   );
 }

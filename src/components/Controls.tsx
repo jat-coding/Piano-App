@@ -6,7 +6,6 @@ import {
   Forward5Icon,
   CloseIcon,
   PianoIcon,
-  SettingsIcon,
   ExportVideoIcon,
   MicIcon,
 } from './icons';
@@ -42,7 +41,6 @@ export function Controls({
   const clearLoop = useStore((s) => s.clearLoop);
   const practiceMode = useStore((s) => s.practiceMode);
   const setPracticeMode = useStore((s) => s.setPracticeMode);
-  const setShowSettings = useStore((s) => s.setShowSettings);
 
   const nextMode = { off: 'listen', listen: 'wait', wait: 'off' } as const;
   const modeLabel = { off: '', listen: 'Listen', wait: 'Wait' } as const;
@@ -151,14 +149,6 @@ export function Controls({
           aria-label="Export video"
         >
           <ExportVideoIcon size={18} />
-        </button>
-        <button
-          className="ctrl-btn small"
-          onClick={() => setShowSettings(true)}
-          title="Settings"
-          aria-label="Settings"
-        >
-          <SettingsIcon size={18} />
         </button>
       </div>
     </div>

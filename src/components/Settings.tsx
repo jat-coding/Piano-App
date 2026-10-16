@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useStore, type PracticeMode } from '../store';
 import { midiSupported } from '../lib/midiInput';
-import { CloseIcon } from './icons';
+import { CleanupSection } from './CleanupSection';
+import { CloseIcon, SettingsIcon } from './icons';
 
 const MODES: { value: PracticeMode; label: string; hint: string }[] = [
   { value: 'off', label: 'Off', hint: 'Song plays normally.' },
@@ -50,33 +51,16 @@ export function Settings({ onToggleMidi }: Props) {
 
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Modal behavior: focus in, trap Tab, Escape to close, restore focus out.
+  // Non-modal dropdown: the stage stays live behind it, so no backdrop or focus trap.
+  // Focus moves in on open, Escape closes, focus returns to where it was.
   useEffect(() => {
     if (!show) return;
     const prevFocus = document.activeElement as HTMLElement | null;
-    const panel = panelRef.current;
-    panel?.querySelector<HTMLElement>('button, [href], input, select')?.focus();
-
+    panelRef.current?.querySelector<HTMLElement>('button, [href], input, select')?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setShow(false);
-        return;
-      }
-      if (e.key !== 'Tab' || !panel) return;
-      const items = panel.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, [tabindex]:not([tabindex="-1"])',
-      );
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setShow(false);
     };
     document.addEventListener('keydown', onKey);
     return () => {
@@ -85,24 +69,28 @@ export function Settings({ onToggleMidi }: Props) {
     };
   }, [show, setShow]);
 
-  if (!show) return null;
-
   return (
-    <div className="settings-backdrop" onClick={() => setShow(false)}>
-      <div
-        className="settings-panel"
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
+    <>
+      <button
+        className={`settings-btn${show ? ' open' : ''}`}
+        onClick={() => setShow(!show)}
+        title="Settings"
         aria-label="Settings"
-        onClick={(e) => e.stopPropagation()}
+        aria-expanded={show}
       >
+        <SettingsIcon size={18} />
+      </button>
+
+      {show && (
+      <div className="settings-dropdown" ref={panelRef} role="dialog" aria-label="Settings">
         <div className="settings-head">
           <span>Settings</span>
           <button className="x" onClick={() => setShow(false)} aria-label="Close settings">
             <CloseIcon size={20} />
           </button>
         </div>
+
+        <div className="settings-section first">Playback</div>
 
         <Toggle label="Strike glow" value={glow} onChange={setGlow} />
         <Toggle label="Impact effects" value={impacts} onChange={setImpacts} />
@@ -155,7 +143,10 @@ export function Settings({ onToggleMidi }: Props) {
           {practiceMode === 'wait' &&
             ' The keys you need glow green — tap them on screen or play your MIDI keyboard.'}
         </p>
+
+        <CleanupSection />
       </div>
-    </div>
+      )}
+    </>
   );
 }
