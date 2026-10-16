@@ -1,5 +1,5 @@
 import { Midi } from '@tonejs/midi';
-import type { NoteEvent, Song, Hand } from '../types';
+import type { NoteEvent, Song, Hand, PedalSpan } from '../types';
 import { MIN_MIDI, MAX_MIDI } from '../types';
 import { splitHands } from './handSplit';
 
@@ -48,11 +48,40 @@ export async function parseMidi(file: File): Promise<Song> {
     0,
   );
 
+  const pedals = sustainSpans(midi);
+
   return {
     name: file.name.replace(/\.midi?$/i, ''),
     notes: finalNotes,
     duration,
+    ...(pedals.length ? { pedals } : {}),
   };
+}
+
+/**
+ * Sustain-pedal (CC 64) spans from every track, in the same PedalSpan shape the desktop
+ * engine's pedals use, so playback treats both alike. Pedal data often sits on a track with
+ * no notes, so all tracks are merged. MIDI convention: value >= 64 is down, < 64 is up; a
+ * pedal still down at the end of the file is lifted at the last event / note end.
+ */
+export function sustainSpans(midi: Pick<Midi, 'tracks' | 'duration'>): PedalSpan[] {
+  const events = midi.tracks
+    .flatMap((t) => t.controlChanges[64] ?? [])
+    .map((c) => ({ time: c.time, down: c.value >= 64 / 127 }))
+    .filter((e) => Number.isFinite(e.time))
+    .sort((a, b) => a.time - b.time);
+
+  const spans: PedalSpan[] = [];
+  let start: number | null = null;
+  for (const e of events) {
+    if (e.down && start === null) start = e.time;
+    else if (!e.down && start !== null) {
+      if (e.time > start) spans.push({ cc: 64, start, end: e.time });
+      start = null;
+    }
+  }
+  if (start !== null && midi.duration > start) spans.push({ cc: 64, start, end: midi.duration });
+  return spans;
 }
 
 function pushNote(

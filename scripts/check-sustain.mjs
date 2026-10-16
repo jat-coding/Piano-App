@@ -1,6 +1,10 @@
 // Sustain pedal in playback (2026-10-16).
 //
-// usage: node scripts/check-sustain.mjs [desktop-reply.json [original.wav [outdir]]]
+// usage: node scripts/check-sustain.mjs [desktop-reply.json|file.mid [original.wav [outdir]]]
+//   file.mid (2026-10-16): the song comes from the app's own parseMidi() instead, so its CC 64
+//   pedal spans are the ones S2/S3 measure (scripts/fixtures/pedal-cc64.mid from
+//   make-pedal-midi.mjs). M1 then also checks the parsed spans and that a MIDI file without
+//   CC 64 (public/demo.mid) gets no pedals.                                              HARD
 //   desktop-reply.json: what the desktop helper (/api/transcribe) returned for a clip (notes +
 //   pedals). With it, the real PlaybackEngine and the export's piano re-render run in Chromium on
 //   that song with and without its pedals, and the difference is measured (and written as WAVs
@@ -64,7 +68,10 @@ if (!replyPath) {
 }
 
 // ---- S2 / S3 in Chromium ----------------------------------------------------------------
-const reply = JSON.parse(readFileSync(replyPath, 'utf8'));
+const isMid = /\.midi?$/i.test(replyPath);
+const reply = isMid
+  ? { midiB64: readFileSync(replyPath).toString('base64'), noPedalB64: readFileSync('public/demo.mid').toString('base64') }
+  : JSON.parse(readFileSync(replyPath, 'utf8'));
 const entry = `
 import * as Tone from 'tone';
 import { PlaybackEngine } from './src/audio/playback';
@@ -72,7 +79,8 @@ import { renderPianoAudio } from './src/export/exportAudio';
 import { rawToSong, DEFAULT_BUILD } from './src/lib/cleanup';
 import { dropInaudible } from './src/lib/noiseGate';
 import { sustainedEnds } from './src/audio/sustain';
-window.T = { Tone, PlaybackEngine, renderPianoAudio, rawToSong, DEFAULT_BUILD, dropInaudible, sustainedEnds };
+import { parseMidi } from './src/lib/midi';
+window.T = { Tone, PlaybackEngine, renderPianoAudio, rawToSong, DEFAULT_BUILD, dropInaudible, sustainedEnds, parseMidi };
 `;
 const bundle = 'scripts/_sustain-bundle.js';
 await build({ stdin: { contents: entry, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, format: 'iife', outfile: bundle, logLevel: 'silent' });
@@ -104,12 +112,25 @@ await page.addScriptTag({ content: code });
 
 const res = await page.evaluate(
   async ({ reply, wantWav }) => {
-    const { Tone, PlaybackEngine, renderPianoAudio, rawToSong, DEFAULT_BUILD, dropInaudible, sustainedEnds } = window.T;
-    // The same steps the app takes: noise gate in transcribe.ts, rawToSong in pipeline.ts.
-    const base = rawToSong('reel', dropInaudible(reply.notes), DEFAULT_BUILD);
-    const pedals = (reply.pedals ?? []).map((p) => ({ cc: p.cc, start: p.startTimeSeconds, end: p.endTimeSeconds }));
-    const dry = { ...base, engine: 'transkun' };
-    const wet = { ...dry, pedals };
+    const { Tone, PlaybackEngine, renderPianoAudio, rawToSong, DEFAULT_BUILD, dropInaudible, sustainedEnds, parseMidi } = window.T;
+    let dry, wet, pedals, midiInfo = null;
+    if (reply.midiB64) {
+      // MIDI import: the app's parseMidi(), as pipeline.loadFile calls it.
+      const file = (b64, name) => new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], name);
+      const parsed = await parseMidi(file(reply.midiB64, 'pedal-cc64.mid'));
+      const plain = await parseMidi(file(reply.noPedalB64, 'demo.mid'));
+      pedals = parsed.pedals ?? [];
+      const { pedals: _p, ...rest } = parsed;
+      dry = rest;
+      wet = parsed;
+      midiInfo = { pedals, plainHasPedals: 'pedals' in plain, plainNotes: plain.notes.length };
+    } else {
+      // The same steps the app takes: noise gate in transcribe.ts, rawToSong in pipeline.ts.
+      const base = rawToSong('reel', dropInaudible(reply.notes), DEFAULT_BUILD);
+      pedals = (reply.pedals ?? []).map((p) => ({ cc: p.cc, start: p.startTimeSeconds, end: p.endTimeSeconds }));
+      dry = { ...base, engine: 'transkun' };
+      wet = { ...dry, pedals };
+    }
 
     // S2: drive the real engine frame by frame with a sampler that records what it is asked.
     let now = 0;
@@ -162,6 +183,7 @@ const res = await page.evaluate(
       sustain: pedals.filter((p) => p.cc === 64),
       dryCalls,
       wetCalls,
+      midiInfo,
       sr,
       dry: Array.from(mDry),
       wet: Array.from(mWet),
@@ -172,8 +194,16 @@ const res = await page.evaluate(
 );
 await browser.close();
 
+// ---- M1 ----
+const { notes, ends, sustain, dryCalls, wetCalls, midiInfo } = res;
+if (midiInfo) {
+  const got = midiInfo.pedals.map((p) => `${p.cc}:${p.start.toFixed(2)}-${p.end.toFixed(2)}`).join(' ');
+  check(got === '64:0.05-1.90 64:2.05-3.90 64:4.05-5.90', `M1 CC 64 from the note-less pedal track -> spans in PedalSpan shape (${got})`);
+  check(midiInfo.pedals.every((p) => Object.keys(p).sort().join() === 'cc,end,start'), 'M1 spans carry exactly {cc, start, end}');
+  check(!midiInfo.plainHasPedals && midiInfo.plainNotes > 0, `M1 MIDI without CC 64 (demo.mid, ${midiInfo.plainNotes} notes) has no pedals field`);
+}
+
 // ---- S2 ----
-const { notes, ends, sustain, dryCalls, wetCalls } = res;
 check(dryCalls.length === notes.length && wetCalls.length === notes.length, `S2 every note triggered (${dryCalls.length}/${wetCalls.length}/${notes.length})`);
 check(
   dryCalls.every((c, i) => Math.abs(c.dur - Math.max(0.05, notes[i][2])) < 1e-9),

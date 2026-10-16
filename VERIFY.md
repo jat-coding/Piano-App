@@ -12,6 +12,10 @@ whenever a send-back reveals a check that was missing (see FEEDBACK.md).
   separate model of it — see the 2026-10-12 phase-9 lesson below).
 - `node scripts/check-cleanup.mjs`, `check-parse.mjs`, `check-transcribe.mjs`,
   `check-trills.mjs` — run if the change touches that area.
+- `node scripts/check-sustain.mjs [desktop-reply.json|file.mid [original.wav [outdir]]]` -- sustain-pedal
+  playback (S1 unit cases; S2/S3 run the real PlaybackEngine + export render on a real desktop
+  reply, e.g. `../Piano-App-harness/desktop/out/reel-transkun-with-pedals.json`). Run for any
+  change to playback.ts, exportAudio.ts, sustain.ts, or the pedals plumbing.
 - `npm run build` (tsc -b && vite build) must succeed with no new TS errors.
 - No test runner wired beyond these targeted check-*.mjs scripts; there is no `npm test`
   suite yet (package.json's "test" is a stub). Don't claim broader coverage than these
