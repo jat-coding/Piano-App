@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Song } from './types';
+import type { PedalSpan, Song } from './types';
 import type { CleanupParams, RawNote, TranscriptionEngine } from './lib/transcribe';
 import { DEFAULT_CLEANUP } from './lib/transcribe';
 import type { BuildOptions } from './lib/cleanup';
@@ -45,6 +45,7 @@ interface AppState {
   rawNotes: RawNote[] | null; // last transcription output (audio/video source)
   rawEngine: TranscriptionEngine | null; // which engine produced rawNotes
   rawFull: RawNote[] | null; // desktop engine: its notes before the client-side Min-length filter
+  rawPedals: PedalSpan[] | null; // desktop engine: pedal spans for rawNotes
   desktopMinLenMs: number; // desktop engine Min-length, 0 = off (Transkun's note lengths are real key releases)
   sourceName: string;
   transcribing: boolean;
@@ -93,7 +94,7 @@ interface AppState {
   setProgress: (p: number) => void;
   setStage: (s: string) => void;
   setRaw: (raw: RawNote[] | null, name: string) => void;
-  setRawSource: (engine: TranscriptionEngine | null, full: RawNote[] | null) => void;
+  setRawSource: (engine: TranscriptionEngine | null, full: RawNote[] | null, pedals?: PedalSpan[] | null) => void;
   setDesktopMinLen: (ms: number) => void;
   setCleanup: (partial: Partial<CleanupParams>) => void;
   setBuild: (partial: Partial<BuildOptions>) => void;
@@ -139,6 +140,7 @@ export const useStore = create<AppState>((set) => ({
   rawNotes: null,
   rawEngine: null,
   rawFull: null,
+  rawPedals: null,
   desktopMinLenMs: 0,
   sourceName: '',
   transcribing: false,
@@ -194,7 +196,7 @@ export const useStore = create<AppState>((set) => ({
   setProgress: (progress) => set({ progress }),
   setStage: (stage) => set({ stage }),
   setRaw: (rawNotes, sourceName) => set({ rawNotes, sourceName }),
-  setRawSource: (rawEngine, rawFull) => set({ rawEngine, rawFull }),
+  setRawSource: (rawEngine, rawFull, rawPedals = null) => set({ rawEngine, rawFull, rawPedals }),
   setDesktopMinLen: (desktopMinLenMs) => set({ desktopMinLenMs }),
   setCleanup: (partial) => set((s) => ({ cleanup: { ...s.cleanup, ...partial } })),
   setBuild: (partial) => set((s) => ({ build: { ...s.build, ...partial } })),
@@ -232,6 +234,7 @@ export const useStore = create<AppState>((set) => ({
       rawNotes: null,
       rawEngine: null,
       rawFull: null,
+      rawPedals: null,
       desktopMinLenMs: 0,
       sourceName: '',
       transcribing: false,

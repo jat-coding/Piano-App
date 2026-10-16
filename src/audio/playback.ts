@@ -1,5 +1,6 @@
 import * as Tone from 'tone';
 import type { NoteEvent, Song } from '../types';
+import { sustainedEnds } from './sustain';
 
 export const SALAMANDER = 'https://tonejs.github.io/audio/salamander/';
 
@@ -54,6 +55,8 @@ export interface ScratchStats {
 export class PlaybackEngine {
   private sampler: Tone.Sampler | null = null;
   private song: Song | null = null;
+  /** Song-s each note stops sounding with the sustain pedal, by note index (null = no pedal data). */
+  private ringEnds: Float64Array | null = null;
 
   private _songTime = 0;
   private _rate = 1;
@@ -116,6 +119,7 @@ export class PlaybackEngine {
 
   setSong(song: Song | null): void {
     this.song = song;
+    this.ringEnds = song ? sustainedEnds(song.notes, song.pedals) : null;
     this.loopA = null;
     this.loopB = null;
     this.seek(0);
@@ -379,7 +383,7 @@ export class PlaybackEngine {
     } else {
       this._songTime += dt * this._rate;
       while (this.cursor < notes.length && notes[this.cursor].startTime <= this._songTime) {
-        this.trigger(notes[this.cursor]);
+        this.trigger(this.cursor);
         this.cursor++;
       }
     }
@@ -447,7 +451,7 @@ export class PlaybackEngine {
       this.cursor < notes.length &&
       notes[this.cursor].startTime - gateTime <= CHORD_EPS
     ) {
-      this.trigger(notes[this.cursor]);
+      this.trigger(this.cursor);
       this.cursor++;
     }
     this._waiting = false;
@@ -462,12 +466,19 @@ export class PlaybackEngine {
     return this.muteRight; // right + unknown
   }
 
-  private trigger(n: NoteEvent): void {
-    if (this.silent || !this.sampler || !this.loaded) return;
+  /** Note-seconds note i sounds for: its own length, or longer while the sustain pedal holds it. */
+  ringDuration(i: number): number {
+    const n = this.song!.notes[i];
+    return this.ringEnds ? this.ringEnds[i] - n.startTime : n.duration;
+  }
+
+  private trigger(i: number): void {
+    if (this.silent || !this.sampler || !this.loaded || !this.song) return;
+    const n = this.song.notes[i];
     if (this.isMuted(n)) return;
     const name = Tone.Frequency(n.midi, 'midi').toNote();
-    // Sustain in real seconds so the sound matches the on-screen note length.
-    const dur = Math.max(0.05, n.duration / this._rate);
+    // Sustain in real seconds so the sound matches the on-screen note length (or the pedal).
+    const dur = Math.max(0.05, this.ringDuration(i) / this._rate);
     try {
       this.sampler.triggerAttackRelease(name, dur, undefined, n.velocity);
     } catch {

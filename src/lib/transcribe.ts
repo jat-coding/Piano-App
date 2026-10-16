@@ -16,7 +16,7 @@ export interface TranscribeResult {
   engine: TranscriptionEngine;
   /** Desktop only: 'cuda' or 'cpu', as reported by the helper. */
   device?: string;
-  /** Desktop only: sustain-pedal spans (cc 64/66/67). Not used by the app yet. */
+  /** Desktop only: pedal spans (cc 64/66/67). cc 64 (sustain) drives playback ring-out. */
   pedals?: { cc: number; startTimeSeconds: number; endTimeSeconds: number }[];
 }
 

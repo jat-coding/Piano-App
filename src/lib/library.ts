@@ -18,6 +18,8 @@ export interface SavedSong {
   lastPlayedAt?: number; // for "last practiced first"
   /** Transcribed songs saved since 2026-10-13: 'transkun' (desktop) or 'basic-pitch' (on-device). */
   engine?: Song['engine'];
+  /** Desktop-transcribed songs saved since 2026-10-16: pedal spans (sustain drives playback). */
+  pedals?: Song['pedals'];
   notes: NoteEvent[];
 }
 
@@ -81,6 +83,7 @@ export async function saveSong(song: Song, kind: SongKind): Promise<SavedSong> {
     duration: song.duration,
     createdAt: Date.now(),
     ...(song.engine ? { engine: song.engine } : {}),
+    ...(song.pedals?.length ? { pedals: song.pedals } : {}),
     notes: song.notes,
   };
   await tx('readwrite', (s) => s.put(record));
@@ -114,7 +117,13 @@ export async function getSong(id: string): Promise<Song | null> {
   if (!rec) return null;
   // Songs transcribed before the re-onset cleanup existed get it on load (a no-op for newer ones).
   const notes = rec.kind === 'midi' ? rec.notes : mergeGhostReonsets(rec.notes).notes;
-  return { name: rec.name, notes, duration: rec.duration, ...(rec.engine ? { engine: rec.engine } : {}) };
+  return {
+    name: rec.name,
+    notes,
+    duration: rec.duration,
+    ...(rec.engine ? { engine: rec.engine } : {}),
+    ...(rec.pedals?.length ? { pedals: rec.pedals } : {}),
+  };
 }
 
 export async function deleteSong(id: string): Promise<void> {

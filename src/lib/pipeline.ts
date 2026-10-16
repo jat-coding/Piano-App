@@ -3,10 +3,10 @@ import { parseMidi } from './midi';
 import { fileToMonoAudioPair, isMidi, isAudioOrVideo, TARGET_SR, HIRES_SR } from './audio';
 import { transcribe, rederive, cancelTranscription, filterMinLength } from './transcribe';
 import { rawToSong } from './cleanup';
-import type { CleanupParams } from './transcribe';
+import type { CleanupParams, TranscribeResult } from './transcribe';
 import type { BuildOptions } from './cleanup';
 import { saveSong, listSongs, deleteSong, getSong, touchSong, saveMedia } from './library';
-import type { Song } from '../types';
+import type { PedalSpan, Song } from '../types';
 import type { SongKind } from './library';
 
 /** The original recording + the selection that was transcribed (for video export). */
@@ -89,10 +89,24 @@ export function cancelProcessing(): void {
 
 /** Rebuild the playable Song from the cached raw notes + current build options. */
 function rebuild(): void {
-  const { rawNotes, rawEngine, sourceName, build, setSong } = useStore.getState();
+  const { rawNotes, rawEngine, rawPedals, sourceName, build, setSong } = useStore.getState();
   if (!rawNotes) return;
   const song = rawToSong(sourceName, rawNotes, build);
-  setSong(rawEngine ? { ...song, engine: rawEngine } : song);
+  setSong({
+    ...song,
+    ...(rawEngine ? { engine: rawEngine } : {}),
+    ...(rawPedals?.length ? { pedals: rawPedals } : {}),
+  });
+}
+
+/** The helper's pedal spans in the app's shape; malformed entries are dropped. */
+function toPedalSpans(raw: TranscribeResult['pedals']): PedalSpan[] | null {
+  if (!Array.isArray(raw)) return null;
+  const spans = raw
+    .filter((p) => p && Number.isFinite(p.cc) && Number.isFinite(p.startTimeSeconds) && Number.isFinite(p.endTimeSeconds))
+    .map((p) => ({ cc: p.cc, start: p.startTimeSeconds, end: p.endTimeSeconds }))
+    .filter((p) => p.end > p.start);
+  return spans.length ? spans : null;
 }
 
 /** Entry point for any dropped/selected file. */
@@ -218,7 +232,7 @@ export async function confirmTrim(startSec: number, endSec: number): Promise<voi
       // Min-length starts off: Transkun's lengths are real key releases, and the on-device
       // engine's 80 ms default cuts its MAESTRO score from 98.5 to 82.3.
       s2.setDesktopMinLen(0);
-      s2.setRawSource('transkun', result.notes);
+      s2.setRawSource('transkun', result.notes, toPedalSpans(result.pedals));
     } else {
       s2.setRawSource('basic-pitch', null);
     }

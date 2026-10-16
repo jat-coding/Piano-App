@@ -15,6 +15,15 @@ export interface Song {
   duration: number; // seconds, end of last note
   /** Transcribed songs: which engine wrote the notes (absent on MIDI and older songs). */
   engine?: 'transkun' | 'basic-pitch';
+  /** Desktop-transcribed songs: pedal spans Transkun detected (absent on MIDI, on-device, older songs). */
+  pedals?: PedalSpan[];
+}
+
+/** A pedal held down from start to end (seconds). cc 64 = sustain, 66 = sostenuto, 67 = soft. */
+export interface PedalSpan {
+  cc: number;
+  start: number;
+  end: number;
 }
 
 export const MIN_MIDI = 21; // A0

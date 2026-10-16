@@ -2,6 +2,7 @@ import * as Tone from 'tone';
 import type { Song } from '../types';
 import type { SongMedia } from '../lib/library';
 import { SALAMANDER, SAMPLE_URLS } from '../audio/playback';
+import { sustainedEnds } from '../audio/sustain';
 
 const SAMPLE_LEAD = 0.05; // seconds
 
@@ -58,13 +59,15 @@ export async function renderPianoAudio(
     async () => {
       const sampler = new Tone.Sampler({ urls: SAMPLE_URLS, baseUrl: SALAMANDER, release: 1 }).toDestination();
       await Tone.loaded();
-      for (const n of song.notes) {
+      const ends = sustainedEnds(song.notes, song.pedals);
+      song.notes.forEach((n, i) => {
         const name = Tone.Frequency(n.midi, 'midi').toNote();
         // Trigger a touch early: the Salamander MP3s start with ~50ms of near-silence,
         // which made the sound trail the picture by about 2 frames (measured).
         const at = Math.max(0, n.startTime - SAMPLE_LEAD);
-        sampler.triggerAttackRelease(name, Math.max(0.05, n.duration), at, n.velocity);
-      }
+        const dur = ends ? ends[i] - n.startTime : n.duration; // the sustain pedal holds it longer
+        sampler.triggerAttackRelease(name, Math.max(0.05, dur), at, n.velocity);
+      });
     },
     duration,
     2,
