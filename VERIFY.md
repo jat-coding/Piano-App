@@ -41,6 +41,47 @@ renders. Every hand-motion/finger-curl change must also:
    (`artifacts/piano-app/...` — see memory/project/piano-app-repo.md for which file) for
    the specific dimension he flagged (dynamic movement, finger bend/curl naturalness).
 
+## Fresh reviewer before any "fixed" message (new, 2026-10-15)
+
+2026-10-12 9:14pm-10:09pm: he sent back hand/finger overlap TWICE in one evening -- the
+second time right after being told "Hands no longer overlap" with an after-video, and the
+hands were still overlapping with the wrong hand on keys. The checker and the person who
+built the fix both looked at the same clip they'd already decided was fixed and saw what
+they expected to see.
+
+Before any reply says a hand/finger/overlap issue is fixed: export 6 frames from the real
+clip spanning the flagged section (not hand-picked frames that look clean), hand them to a
+FRESH no-context turn (new session/subagent, given ONLY his original words and the 6
+frames -- never the build's own explanation of what it changed), and ask it to answer
+"does this match what he asked for?" with no other framing. Only send the "fixed" message
+if that fresh judgment says yes. This is a required done-criterion on every Piano-App-hands
+task card that touches hand motion, finger assignment, or overlap -- add it to the card's
+"Done when" list, not just this file.
+
+## Reel answer key must be current before quoting a score (new, 2026-10-15)
+
+2026-10-14: a noise-gate fix that corrected 1 note out of 716 was reported using the
+93.2% reel-vs-reference score from BEFORE that fix (and before an unrelated cleanup
+deleted the reel scoring scratch work entirely) -- a stale number presented as the
+answer. He called it out twice the same evening ("it was modeled perfectly you need to
+use your engine and app to recreate this").
+
+Before quoting ANY reel-vs-reference accuracy number in a reply:
+1. Confirm the scoring script and its answer key actually exist and ran AFTER the change
+   being reported -- check the run timestamp against the change's own commit/build time,
+   not just that a number is sitting in a log file.
+2. If either is missing (as of 2026-10-15 they are -- the reel scoring harness under
+   `projects/amt-eval/` was lost to an unrelated cleanup and could not be recovered from
+   D:\WSL-archive or the Trash; only checked in a tarball of venv-aria and a trashed
+   aria-amt library clone, neither holds it), say so explicitly instead of quoting the old
+   number -- rebuilding it is its own task, not something to paper over with a stale score.
+3. Once a current score exists: attach a stacked export (ExportDialog's "include the
+   original video" toggle) of the clip being scored alongside the number, so he can see
+   the same thing the score claims to measure.
+4. Use `projects/Piano-App-harness/3-your-clip.wav` or his own pointed-to clip (his
+   2026-10-14 7:37pm answer: the next accuracy job targets a clip HE points to, not a
+   self-chosen one) as the scored clip, not an arbitrary reference.
+
 ## Missed-note-press check (new, 2026-10-14)
 
 Specific to this task: every note in the transcribed output that should get a hand/finger
