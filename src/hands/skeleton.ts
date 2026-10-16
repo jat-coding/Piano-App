@@ -97,7 +97,22 @@ const LIFT_MCP_ENGAGED = -6;
  */
 const BOB_PRESS = 6;
 /** Idle fingers: a hair above the key, with a slow, tiny drift each. */
-const MICRO_MCP = 2.6;
+const MICRO_MCP = 4;
+/** ...and a slow sideways sway of each idle finger, degrees. */
+const MICRO_SPLAY = 2;
+/**
+ * A hand that isn't playing breathes: the whole palm drifts a few mm and turns a degree or
+ * two on slow, unrelated sines (per hand), instead of freezing between notes. Fades out as
+ * any finger engages a key, so a playing hand keeps its exact placement. mm, mm, radians.
+ */
+const BREATH_X = 6;
+const BREATH_Y = 9;
+const BREATH_ROT = 0.05;
+/** ...the hand rises and settles with it (seen from above: a touch bigger, as in a leap's arc)... */
+const BREATH_SCALE = 0.035;
+/** ...and the fingers open and close together a little, degrees of splay at the little finger. */
+const BREATH_FAN = 3;
+const BREATH_HZ = 0.17;
 /** How much an idle finger follows its neighbour's MCP move (pianist-scaled enslaving). */
 const COUPLE: Record<string, number> = { '4-5': 0.2, '5-4': 0.2, '3-4': 0.16, '4-3': 0.16, '2-3': 0.08, '3-2': 0.08 };
 /** Octaves: the middle fingers curl up out of the way (PIP 55-70°, tips 15-25 mm up). */
@@ -473,7 +488,9 @@ function solveAt(pose: HandPose, tf: TipFrame, palmOnly: boolean): Skeleton | Pa
   const dir = pose.hand === 'right' ? 1 : -1;
   const st = pose.style;
   // A leap's arc: the hand looks ~4% bigger at the top (closer to the eye).
-  const k = ((tf.unit * HAND_SCALE) / KEY_MM) * (1 + 0.04 * Math.min(1, st.leapLift / 40));
+  const idleH = 1 - Math.max(...pose.fingers.slice(1).map((fp) => fp.engage ?? 0));
+  const breath = Math.sin(2 * Math.PI * BREATH_HZ * pose.t + 0.7 + (dir > 0 ? 0 : 2.1));
+  const k = ((tf.unit * HAND_SCALE) / KEY_MM) * (1 + 0.04 * Math.min(1, st.leapLift / 40)) * (1 + BREATH_SCALE * idleH * breath);
   const targets: Pt[] = [{ x: 0, y: 0 }];
   for (let f = 1; f <= 5; f++) targets.push(tipTarget(pose, f, tf));
   const engage = pose.fingers.map((fp) => fp.engage ?? 0);
@@ -661,6 +678,22 @@ function solveAt(pose: HandPose, tf: TipFrame, palmOnly: boolean): Skeleton | Pa
     }
     best = { x: own.x + strainW * (cx + sx / sw - own.x), y: own.y + strainW * (cy + sy / sw - own.y), rot: own.rot + strainW * (sr / sw - own.rot) };
   }
+  // Breathing (see BREATH_X): only as far as the hand is idle, and never toward the other hand
+  // past the line between them.
+  if (idleH > 0) {
+    const ph = dir > 0 ? 0 : 2.1;
+    const T = pose.t;
+    let bx = idleH * BREATH_X * k * (0.7 * Math.sin(2 * Math.PI * 0.21 * T + ph) + 0.3 * Math.sin(2 * Math.PI * 0.47 * T + 1.3 * ph));
+    const by = idleH * BREATH_Y * k * breath;
+    const br = idleH * BREATH_ROT * Math.sin(2 * Math.PI * 0.13 * T + 2.4 + ph);
+    if (wallW > 0 && side * bx > 0) {
+      const { toWorld: tw } = frame({ x: best.x, y: best.y, rot: best.rot + br }, k, dir);
+      let room = Infinity;
+      for (const [a, v] of PALM_EDGE) room = Math.min(room, -(side * (tw(a, v).x - wallX) + WALL_GAP * k));
+      bx = side * Math.max(0, Math.min(side * bx, room));
+    }
+    best = { x: best.x + bx, y: best.y + by, rot: best.rot + br };
+  }
   // Never tilt past the limit, whatever the springs want.
   const rot = Math.max(-MAX_TILT, Math.min(MAX_TILT, best.rot));
   const { toWorld, toLocal } = frame({ x: best.x, y: best.y, rot }, k, dir);
@@ -836,7 +869,11 @@ function solveAt(pose: HandPose, tf: TipFrame, palmOnly: boolean): Skeleton | Pa
     if (idle > 0) {
       const hsh = hash01(pose.hand, f);
       const fq = 0.3 + 0.4 * hsh;
-      m += idle * MICRO_MCP * Math.sin(2 * Math.PI * fq * t + 6.283 * hsh);
+      // Octave shapes hold the middle fingers curled up high: they drift less.
+      const calm = 1 - 0.7 * ls.octave;
+      m += calm * idle * MICRO_MCP * Math.sin(2 * Math.PI * fq * t + 6.283 * hsh);
+      splay += calm * idle * BREATH_FAN * idleH * breath * (f - 3) / 2;
+      splay += calm * idle * MICRO_SPLAY * Math.sin(2 * Math.PI * (0.19 + 0.25 * hsh) * t + 3.1 + 4.7 * hsh);
       for (const g of [f - 1, f + 1]) {
         const c = COUPLE[`${g}-${f}`];
         if (c) m += idle * c * act[g];

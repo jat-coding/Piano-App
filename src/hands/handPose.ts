@@ -116,6 +116,8 @@ interface KeyPose {
   depth: number[];
   /** Notes under a finger in this pose (struck now, or still held from before). */
   notes: Set<number>;
+  /** When every note under a finger in this pose has ended (the hand is free to leave early). */
+  free: number;
 }
 
 interface Press {
@@ -184,11 +186,11 @@ const LIFT = 0.07; // lifting off after the note ends
 const SINK_IN = 0.08; // the hand starts sinking into a keystroke this long before it lands...
 const SINK_OUT = 0.22; // ...and rises back over this long after
 const RELEASE_BLEND = 0.1; // a lifted finger rejoins the hand over this long
-const APPROACH = 0.18; // a finger starts reaching for its next key this long before landing
+const APPROACH = 0.3; // a finger starts reaching for its next key this long before landing (anticipation, not a last-moment snap)
 const ENGAGE_RELEASE = 0.3;
 /** Spacing of the nearby moments the palm placement is averaged over, seconds (HandPose.around). */
 const AROUND_DT = 0.025;
-const STRETCH_OPEN = 0.32; // a finger opening the hand into a wide stretch starts this long before landing
+const STRETCH_OPEN = 0.45; // a finger opening the hand into a wide stretch starts this long before landing
 const REACH_AHEAD = 4.5; // ...but not for a key further than this (white keys) from one still held
 /**
  * How far (white keys) finger f may reach ahead from a key finger hf still holds. Beyond
@@ -290,7 +292,7 @@ function keyPose(hand: PlayHand, time: number, played: Map<Finger, number>, hand
       if (f > hi) depth[f] = depth[hi] * 0.4;
     }
   }
-  return { time, u, depth, notes: new Set() };
+  return { time, u, depth, notes: new Set(), free: time };
 }
 
 function lowerBoundNum(arr: number[], t: number): number {
@@ -319,6 +321,14 @@ function lowerBound(arr: { time: number }[] | { start: number }[] | { t0: number
 const GLIDE_MIN = 0.16;
 const GLIDE_PER_KEY = 0.045;
 const GLIDE_MAX = 0.7;
+/**
+ * With time to spare (its notes have ended and the next ones are a while off), a hand
+ * doesn't wait and lunge: it drifts over early and slowly, taking up to GLIDE_CALM times
+ * its usual glide (at most GLIDE_CALM_MAX s, at most half the free time), so it is in place
+ * before the next note, the way a pianist gets there ahead of time.
+ */
+const GLIDE_CALM = 3;
+const GLIDE_CALM_MAX = 2.2;
 
 /**
  * Make a pose anatomically plausible by moving only the free fingers: the long
@@ -381,7 +391,13 @@ function glideWindow(a: KeyPose, b: KeyPose): { start: number; arrive: number; d
   // The hand can't leave before the keys of `a` are struck (a beat on them for a short
   // move; a leap may leave sooner, the pedal or the other fingers carry the sound).
   const hold = Math.min(dist > LEAP_KEYS ? 0.05 : 0.08, gap * 0.25);
-  const start = Math.max(a.time + hold, arrive - glideTime(dist));
+  let start = Math.max(a.time + hold, arrive - glideTime(dist));
+  // Never before a's notes have ended, so no sounding key loses its finger to this.
+  const free = Math.max(a.time + hold, a.free);
+  if (dist > SMALL_SHIFT && arrive - free > 2 * glideTime(dist)) {
+    const calm = Math.min(GLIDE_CALM * glideTime(dist), GLIDE_CALM_MAX, 0.5 * (arrive - free));
+    start = Math.min(start, Math.max(free, arrive - calm));
+  }
   return { start, arrive, dist };
 }
 
@@ -469,6 +485,7 @@ export class HandAnimator {
         });
         const kp = keyPose(hand, e.time, played, e.handU);
         kp.notes = under;
+        for (const ni of under) kp.free = Math.max(kp.free, this.fingering.perNote[ni]?.releaseBy ?? notes[ni].startTime + notes[ni].duration);
         return kp;
       });
       const ks = this.keys[hand];
@@ -836,7 +853,7 @@ export class HandAnimator {
         // longer thumb move keeps the usual lead.
         if (f === 1) {
           const tuck = k >= 0 && Math.abs(next.u - list[k].u) <= 3;
-          lead = tuck ? Math.max(0.06, land - Math.max(list[k].end, land - THUMB_EARLY)) : APPROACH * 2;
+          lead = tuck ? Math.max(0.06, land - Math.max(list[k].end, land - THUMB_EARLY)) : APPROACH * 1.5;
         }
         let far = 0;
         let stretch = false;
