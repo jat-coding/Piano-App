@@ -45,6 +45,9 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
   const [shareError, setShareError] = useState<string | null>(null);
   // "Include the original video" (stacked on top). Off by default: plain falling notes.
   const [stack, setStack] = useState(false);
+  // View style: starts at the one picked in Home → Profile, can be changed for this video.
+  const savedStyle = useStore((s) => s.viewStyle);
+  const [perspective, setPerspective] = useState(savedStyle === 'perspective');
 
   // Work out layout + sound source from what the library kept for this song.
   useEffect(() => {
@@ -191,6 +194,19 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
                 </button>
               </div>
             )}
+            <div className="toggle-row export-toggle">
+              <span id="export-persp-label">Perspective view (lanes recede into the distance)</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={perspective}
+                aria-labelledby="export-persp-label"
+                className={`switch${perspective ? ' on' : ''}`}
+                onClick={() => setPerspective(!perspective)}
+              >
+                <span className="knob" />
+              </button>
+            </div>
             {phase.plan.notes.map((n) => (
               <p key={n} className="export-note">
                 {n}
@@ -206,6 +222,7 @@ export function ExportDialog({ onClose, session }: { onClose: () => void; sessio
                     ...phase.plan,
                     layout: stack && phase.plan.canStack ? 'video' : 'full',
                     hands: showHands,
+                    viewStyle: perspective ? 'perspective' : 'classic',
                   })
                 }>
                 Make video

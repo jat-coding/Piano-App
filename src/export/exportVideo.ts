@@ -1,6 +1,7 @@
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer';
 import type { Song } from '../types';
 import type { SongMedia } from '../lib/library';
+import type { ViewStyle } from '../render/perspective';
 import { ExportFrameRenderer, EXPORT_H, EXPORT_W, type ExportLayout } from './frameRenderer';
 import { renderPianoAudio, sliceOriginalAudio, audioBufferToWav } from './exportAudio';
 import { openVideo, type FrameSource } from './videoSource';
@@ -26,6 +27,8 @@ export interface ExportPlan {
   notes: string[];
   /** Draw the animated hands (Settings → Show hands). Defaults to on. */
   hands?: boolean;
+  /** Falling-note view style (Home → Profile, or picked in the dialog). Defaults to classic. */
+  viewStyle?: ViewStyle;
   /** A play-along session: its timeline, hits, score card, and the player's own sound. */
   session?: SessionExport;
   /** The song's original video is kept, so it can go on top (layout 'video') if the user wants. */
@@ -253,6 +256,7 @@ export async function exportVideo(
     plan.hands ?? true,
     plan.session?.track ?? null,
     videoAspect,
+    plan.viewStyle ?? 'classic',
   );
   const totalFrames = Math.max(1, Math.round(plan.duration * FPS));
   const vCodec = force === 'webm' ? null : await pickVideoCodec();

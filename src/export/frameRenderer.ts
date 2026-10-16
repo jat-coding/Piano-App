@@ -6,6 +6,7 @@ import { HandAnimator } from '../hands/handPose';
 import { drawHands, type HandGeometry } from '../hands/drawHands';
 import { keyU } from '../hands/fingering';
 import type { SessionTrack } from '../interactive/recording';
+import * as P from '../render/perspective';
 
 /** 'full' = falling notes fill the frame; 'video' = source video on top, notes below. */
 export type ExportLayout = 'full' | 'video';
@@ -66,6 +67,9 @@ export class ExportFrameRenderer {
   private hands: HandAnimator | null = null;
   private handGeom: HandGeometry | null = null;
   private handRoomTop: number;
+  // Perspective view: projection for the note field + the reflection strip under the hands.
+  private persp: P.Perspective | null = null;
+  private reflH = 0;
 
   constructor(
     private song: Song,
@@ -75,6 +79,7 @@ export class ExportFrameRenderer {
     private session: SessionTrack | null = null,
     /** The source video's upright height / width, when known ('video' layout only). */
     videoAspect?: number,
+    viewStyle: P.ViewStyle = 'classic',
   ) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = EXPORT_W;
@@ -100,7 +105,9 @@ export class ExportFrameRenderer {
     this.footerTop = EXPORT_H - footer;
     // Room under the keys for the palms (fingers lie on the keys, wrists below them).
     const handRoom = showHands ? Math.round(Math.min(EXPORT_H * 0.12, handUnit * 3.6)) : 0;
-    this.handRoomTop = this.footerTop - handRoom;
+    const persp = viewStyle === 'perspective';
+    this.reflH = persp ? Math.round((this.footerTop - this.notesTop) * P.REFLECTION_FRACTION) : 0;
+    this.handRoomTop = this.footerTop - this.reflH - handRoom;
     this.strikeY = this.handRoomTop - this.kbH;
     if (showHands && song.notes.length) {
       // Notes off the zoomed keyboard (stray transcription notes) aren't played by the hands.
@@ -119,6 +126,7 @@ export class ExportFrameRenderer {
     // How many seconds of music are visible above the keys.
     const lookahead = layout === 'video' ? 2.4 : 3.2;
     this.pps = (this.strikeY - this.notesTop) / lookahead;
+    if (persp) this.persp = P.makePerspective(EXPORT_W, this.notesTop, this.strikeY);
 
     this.bgGrad = ctx.createLinearGradient(0, this.notesTop, 0, this.strikeY);
     this.bgGrad.addColorStop(0, COLORS.bgTop);
@@ -147,6 +155,7 @@ export class ExportFrameRenderer {
     ctx.fillRect(0, this.notesTop, EXPORT_W, this.strikeY - this.notesTop);
     ctx.fillStyle = this.pool;
     ctx.fillRect(0, this.notesTop, EXPORT_W, this.strikeY - this.notesTop);
+    if (this.persp) P.drawVanishingGlow(ctx, this.persp, EXPORT_W);
 
     // In a play-along session, t is video time; the song stands still while it waits.
     const s = this.session;
@@ -162,10 +171,14 @@ export class ExportFrameRenderer {
       // Life-size wrists run past the hand room: they slip under the footer's edge.
       ctx.save();
       ctx.beginPath();
-      ctx.rect(0, 0, EXPORT_W, this.footerTop);
+      ctx.rect(0, 0, EXPORT_W, this.footerTop - this.reflH);
       ctx.clip();
       drawHands(ctx, this.hands, songT, this.handGeom);
       ctx.restore();
+    }
+    if (this.persp) {
+      const floor = this.footerTop - this.reflH;
+      P.drawReflection(ctx, this.canvas, 1, EXPORT_W, this.strikeY, floor - this.strikeY, floor, this.reflH, COLORS.bgTop);
     }
     if (s && t >= s.cardFrom) this.drawScoreCard(t - s.cardFrom);
   }
@@ -199,6 +212,11 @@ export class ExportFrameRenderer {
 
   private drawOctaveGuides(): void {
     const { ctx } = this;
+    if (this.persp) {
+      const xs = this.keys.filter((k) => !k.black && k.midi % 12 === 0).map((k) => Math.round(k.x) + 1);
+      P.drawLaneGuides(ctx, this.persp, xs, 'rgba(194,162,74,0.2)', 2);
+      return;
+    }
     ctx.strokeStyle = 'rgba(194,162,74,0.13)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -217,7 +235,8 @@ export class ExportFrameRenderer {
     const s = this.session;
     const notes = this.notes;
     const active = new Map<number, Lit>();
-    const ahead = (this.strikeY - this.notesTop) / pps;
+    const persp = this.persp;
+    const ahead = (persp ? P.maxDist(persp) : this.strikeY - this.notesTop) / pps;
     const radius = Math.min(10, this.whiteW * 0.2);
 
     for (let i = lowerBound(notes, t - 30); i < notes.length; i++) {
@@ -249,12 +268,16 @@ export class ExportFrameRenderer {
       const hit = !s || s.hitAt[i] <= v;
       if (s && !hit && s.required[i] && Math.abs(n.startTime - t) < 0.03) due.add(n.midi);
       if (hit && t >= n.startTime && t < (this.hands ? this.hands.litEnd(i) : end) && t < sus && !active.has(n.midi)) active.set(n.midi, { hand });
-      if (h <= 0) continue;
+      if (h <= 0 && !persp) continue;
 
       const black = isBlackKey(n.midi);
       const w = black ? key.w : key.w * 0.86;
       const x = key.cx - w / 2;
       const fill = noteColor(hand, black);
+      if (persp) {
+        this.drawPerspectiveBar(persp, n, n.startTime - t, sus < end ? sus - t : Infinity, x, w, hand, black, fill);
+        continue;
+      }
       // The part of the bar after the finger lets go is drawn hollow (held by the pedal).
       const susY = sus < end ? Math.max(drawTop, Math.min(drawBottom, this.strikeY - (sus - t) * pps)) : drawTop;
       if (susY > drawTop) this.drawHeldTail(hand, x, drawTop, w, susY - drawTop + (susY < drawBottom ? radius : 0), radius);
@@ -277,6 +300,48 @@ export class ExportFrameRenderer {
       }
     }
     return active;
+  }
+
+  /** One note bar in the perspective view: classic colours and letters, projected toward the vanishing point. */
+  private drawPerspectiveBar(
+    p: P.Perspective,
+    n: NoteEvent,
+    aheadS: number,
+    susAheadS: number,
+    x: number,
+    w: number,
+    hand: Hand,
+    black: boolean,
+    fill: string,
+  ): void {
+    const { ctx, pps } = this;
+    const dNear = Math.max(0, aheadS * pps);
+    const dFar = Math.min(P.maxDist(p), aheadS * pps + Math.max(n.duration * pps, 6));
+    if (dFar <= dNear) return;
+    // The part of the bar after the finger lets go is drawn hollow (held by the pedal).
+    const dSus = Math.max(dNear, Math.min(dFar, susAheadS * pps));
+    if (dSus < dFar) {
+      const rgb = handRgb(hand);
+      P.traceBar(ctx, p, x, x + w, dSus, dFar);
+      ctx.fillStyle = `rgba(${rgb},0.2)`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb},0.9)`;
+      ctx.lineWidth = 3 * P.depthScale(p, dSus);
+      ctx.stroke();
+    }
+    if (dSus > dNear) {
+      const e = P.traceBar(ctx, p, x, x + w, dNear, dSus);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      this.drawLetter(n.midi, black, e.xl, e.xr - e.xl, e.yBottom, e.yBottom - e.yTop);
+    } else if (aheadS * pps >= 0) {
+      const yb = P.projY(p, dNear);
+      const s = P.depthScale(p, dNear);
+      this.drawLetter(n.midi, black, P.projX(p, x, dNear), w * s, yb, yb - P.projY(p, dFar), IVORY);
+    }
   }
 
   /** A note's pedal-held stretch: a hollow outline in the hand colour over a faint wash. */
